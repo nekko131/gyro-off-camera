@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="固定カメラ">
+<meta name="theme-color" content="#0b0c0e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>ジャイロOFFカメラ</title>
+<style>
+  /* 一画面のカメラUI。常に暗い部屋の中のファインダーとして設計（単一テーマ） */
+  :root {
+    --bg: #0b0c0e;
+    --panel: rgba(22, 24, 28, 0.92);
+    --fg: #f2f1ec;
+    --muted: #9a9ca3;
+    --line: rgba(255,255,255,0.14);
+    --accent: #e8e4da;
+    --ok: #4caf7d;
+    --danger: #e5533d;
+    --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Helvetica Neue", sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--font);
+    font-size: 15px; line-height: 1.5; overflow: hidden;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  /* ---- 開始画面 ---- */
+  #start {
+    position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center;
+    gap: 20px; padding-block: 32px;
+    padding-left: max(24px, env(safe-area-inset-left, 0px));
+    padding-right: max(24px, env(safe-area-inset-right, 0px));
+  }
+  #start h1 { font-size: 26px; margin: 0; letter-spacing: 0.02em; text-wrap: balance; }
+  #start p { margin: 0; color: var(--muted); max-width: 32em; }
+  #start .big {
+    margin-top: 12px; height: 60px; border-radius: 16px; background: var(--accent); color: #111;
+    font-size: 18px; font-weight: 600;
+  }
+  #start .note { font-size: 13px; }
+  #start .err { color: var(--danger); font-size: 14px; }
+
+  /* ---- ファインダー ---- */
+  #cam { position: fixed; inset: 0; background: #000; }
+  #video {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000;
+  }
+  #video.mirror { transform: scaleX(-1); }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+  #flash.on { animation: flash 180ms ease-out; }
+  @keyframes flash { from { opacity: .85 } to { opacity: 0 } }
+  @media (prefers-reduced-motion: reduce) { #flash.on { animation: none; } }
+
+  .topbar {
+    position: absolute; left: 0; right: 0; top: 0;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,0));
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border-radius: 18px;
+    background: var(--panel); border: 1px solid var(--line); font-size: 13px; color: var(--fg);
+  }
+  .pill .arrow { display: inline-block; width: 16px; height: 16px; transition: transform .25s; }
+  .pill .arrow svg { display: block; width: 100%; height: 100%; }
+  .iconbtn { width: 40px; height: 40px; border-radius: 20px; background: var(--panel); border: 1px solid var(--line);
+    display: inline-flex; align-items: center; justify-content: center; }
+  .iconbtn svg { width: 22px; height: 22px; display: block; }
+
+  .bottombar {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px)); padding-top: 18px;
+    padding-left: max(24px, env(safe-area-inset-left, 0px));
+    padding-right: max(24px, env(safe-area-inset-right, 0px));
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+    background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.6));
+  }
+  #thumbBtn { justify-self: start; position: relative; width: 56px; height: 56px; border-radius: 10px;
+    overflow: hidden; background: var(--panel); border: 1px solid var(--line); }
+  #thumbBtn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #thumbBtn .count {
+    position: absolute; right: -6px; top: -6px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px;
+    background: var(--accent); color: #111; font-size: 12px; font-weight: 700; display: flex; align-items: center;
+    justify-content: center; font-variant-numeric: tabular-nums;
+  }
+  #shutter {
+    width: 78px; height: 78px; border-radius: 50%; border: 4px solid var(--accent); padding: 4px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #shutter span { display: block; width: 100%; height: 100%; border-radius: 50%; background: var(--accent); transition: transform .08s; }
+  #shutter:active span { transform: scale(.88); }
+  #shutter:disabled { opacity: .4; }
+  #flipBtn { justify-self: end; }
+
+  #status {
+    position: absolute; left: 50%; bottom: calc(130px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+    max-width: calc(100% - 48px); text-align: center; font-size: 13px; color: var(--fg);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px 12px;
+  }
+
+  /* ---- シート（ギャラリー・設定） ---- */
+  .sheet {
+    position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column;
+  }
+  .sheet header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-bottom: 10px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    border-bottom: 1px solid var(--line);
+  }
+  .sheet header h2 { font-size: 17px; margin: 0; font-weight: 600; white-space: nowrap; }
+  .sheet header .textbtn { white-space: nowrap; flex: none; }
+  .sheet .body {
+    flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    padding-block: 16px calc(24px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .textbtn { height: 36px; padding: 0 14px; border-radius: 18px; background: var(--panel); border: 1px solid var(--line); font-size: 14px; }
+  .textbtn.primary { background: var(--accent); color: #111; border-color: transparent; font-weight: 600; }
+  .textbtn.danger { color: var(--danger); }
+  .textbtn:disabled { opacity: .4; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .grid button { position: relative; aspect-ratio: 3 / 4; max-width: 100%; border-radius: 10px; overflow: hidden; background: #16181c; }
+  .grid img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .grid .tag { position: absolute; left: 6px; bottom: 6px; font-size: 11px; padding: 2px 6px; border-radius: 6px; background: rgba(0,0,0,.6); }
+  .grid .tag.ok { color: var(--ok); }
+  .empty { color: var(--muted); text-align: center; padding: 48px 0; }
+
+  /* 1枚表示 */
+  #viewer { position: fixed; inset: 0; background: #000; display: flex; flex-direction: column; }
+  #viewer .stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
+  #viewer img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; -webkit-user-select: auto; user-select: auto; -webkit-touch-callout: default; }
+  #viewer .meta { text-align: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #viewer .actions {
+    display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+    padding-block: 12px calc(20px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .hint { color: var(--muted); font-size: 13px; text-align: center; margin: 0 16px 8px; }
+
+  /* 設定 */
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .row .label { font-weight: 600; }
+  .row .desc { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .switch { position: relative; width: 52px; height: 32px; border-radius: 16px; background: #3a3d44; flex: none; transition: background .2s; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%; background: #fff; transition: transform .2s; }
+  .switch[aria-checked="true"] { background: var(--ok); }
+  .switch[aria-checked="true"]::after { transform: translateX(20px); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { padding: 6px 12px; font-size: 14px; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #111; font-weight: 600; }
+  .help { color: var(--muted); font-size: 14px; }
+  .help h3 { color: var(--fg); font-size: 15px; margin: 20px 0 6px; }
+  .help ol, .help ul { padding-left: 1.4em; margin: 0; }
+  .help li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<!-- 開始画面 -->
+<section id="start">
+  <h1>ジャイロOFFカメラ</h1>
+  <p>傾きセンサー（ジャイロ）を見ないカメラです。真下に向けて撮っても、写真の向きが勝手に横になったり逆さになったりしません。画面に映っているとおりに保存します。</p>
+  <button class="big" id="startBtn" type="button">カメラをはじめる</button>
+  <p class="note">はじめて開くとカメラの使用許可を聞かれます。「許可」を選んでください。</p>
+  <p class="note">Safariの共有ボタン →「ホーム画面に追加」で、ふつうのアプリのように使えます。</p>
+  <p class="err" id="startErr" hidden></p>
+</section>
+
+<!-- ファインダー -->
+<section id="cam" hidden>
+  <video id="video" autoplay muted playsinline></video>
+  <div id="flash"></div>
+  <div class="topbar">
+    <span class="pill" title="保存される写真の上方向">
+      <span class="arrow" id="upArrow"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 L13 8 L9.5 8 L9.5 14 L6.5 14 L6.5 8 L3 8 Z" fill="currentColor"/></svg></span>
+      <span id="upLabel">写真の上</span>
+    </span>
+    <button class="iconbtn" id="gearBtn" type="button" aria-label="設定と使い方">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </div>
+  <div id="status" hidden></div>
+  <div class="bottombar">
+    <button id="thumbBtn" type="button" aria-label="撮った写真を見る">
+      <img id="thumbImg" alt="" hidden>
+      <span class="count" id="thumbCount" hidden>0</span>
+    </button>
+    <button id="shutter" type="button" aria-label="撮影"><span></span></button>
+    <button class="iconbtn" id="flipBtn" type="button" aria-label="前後カメラを切り替え">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h3l2-2h6l2 2h3v12H4z"/><path d="M15.5 12.5a3.5 3.5 0 1 1-1-2.5"/><path d="M15.5 9v2h-2"/></svg>
+    </button>
+  </div>
+</section>
+
+<!-- ギャラリー -->
+<section id="gallery" class="sheet" hidden>
+  <header>
+    <button class="textbtn" id="galleryBack" type="button">← 戻る</button>
+    <h2>写真 <span id="galleryCount"></span></h2>
+    <button class="textbtn primary" id="saveAllBtn" type="button">まとめて保存</button>
+  </header>
+  <div class="body">
+    <p class="hint" id="galleryHint">「まとめて保存」→ 共有メニューの「画像を保存」で、写真アプリに入ります。</p>
+    <div class="grid" id="grid"></div>
+    <p class="empty" id="galleryEmpty">まだ写真がありません</p>
+  </div>
+</section>
+
+<!-- 1枚表示 -->
+<section id="viewer" hidden>
+  <header class="topbar" style="position:static;background:none;padding-bottom:10px">
+    <button class="textbtn" id="viewerBack" type="button">← 一覧</button>
+    <span class="meta" id="viewerMeta"></span>
+    <button class="textbtn danger" id="deleteBtn" type="button">削除</button>
+  </header>
+  <div class="stage"><img id="viewerImg" alt="撮影した写真"></div>
+  <p class="hint">保存がうまくいかないときは、写真を長押し →「"写真"に追加」でも保存できます。</p>
+  <div class="actions">
+    <button class="textbtn" id="rotLeft" type="button">↺ 左に回す</button>
+    <button class="textbtn" id="rotRight" type="button">↻ 右に回す</button>
+    <button class="textbtn primary" id="saveOneBtn" type="button">この1枚を保存</button>
+  </div>
+</section>
+
+<!-- 設定 -->
+<section id="settings" class="sheet" hidden>
+  <header>
+    <button class="textbtn" id="settingsBack" type="button">← カメラ</button>
+    <h2>設定と使い方</h2>
+    <span></span>
+  </header>
+  <div class="body">
+    <div class="row">
+      <div><div class="label">向きを固定する</div><div class="desc">本体をどう持っていても、画面が回転しても、写真はいつも同じ向き（縦持ちの向き）で保存します。オフにすると、画面に見えている向きそのままで保存します。</div></div>
+      <button class="switch" id="fixSwitch" role="switch" aria-checked="true" aria-label="向きを固定する"></button>
+    </div>
+    <div class="row">
+      <div><div class="label">画質</div><div class="desc">「高」は商品写真向け。ファイルは大きくなります。</div></div>
+      <div class="seg" id="qualitySeg">
+        <button type="button" data-q="0.95" aria-pressed="true">高</button>
+        <button type="button" data-q="0.85" aria-pressed="false">標準</button>
+      </div>
+    </div>
+    <div class="row">
+      <div><div class="label">カメラの解像度</div><div class="desc" id="resInfo">カメラを開くと表示されます</div></div>
+    </div>
+    <div class="help">
+      <h3>このアプリの仕組み</h3>
+      <ul>
+        <li>iPhone標準のカメラは、傾きセンサーで「どっちが上か」を判断して写真を回転させます。真下に向けて撮ると、この判断がぶれて横や逆さになります。</li>
+        <li>このアプリは傾きセンサーを一切見ません。カメラの映像をそのまま画像にするので、向きの情報（EXIFの回転）も付きません。</li>
+      </ul>
+      <h3>使い方</h3>
+      <ol>
+        <li>まん中の白いボタンで撮影。何枚でも続けて撮れます。</li>
+        <li>左下のサムネイルから一覧を開き、「まとめて保存」。</li>
+        <li>出てきた共有メニューで「画像を保存」を選ぶと、写真アプリに全部入ります。</li>
+      </ol>
+      <h3>注意</h3>
+      <ul>
+        <li>撮った写真はこの端末のブラウザ内に一時保存されます。保存が終わるまでSafariの履歴やサイトデータを消さないでください。</li>
+        <li>ズームや露出の調整はできません。明るい場所で、距離を取って撮ってください。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<canvas id="work" hidden></canvas>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    start: $('start'), startBtn: $('startBtn'), startErr: $('startErr'),
+    cam: $('cam'), video: $('video'), flash: $('flash'), status: $('status'),
+    upArrow: $('upArrow'), upLabel: $('upLabel'), gearBtn: $('gearBtn'),
+    thumbBtn: $('thumbBtn'), thumbImg: $('thumbImg'), thumbCount: $('thumbCount'),
+    shutter: $('shutter'), flipBtn: $('flipBtn'),
+    gallery: $('gallery'), galleryBack: $('galleryBack'), galleryCount: $('galleryCount'),
+    saveAllBtn: $('saveAllBtn'), grid: $('grid'), galleryEmpty: $('galleryEmpty'), galleryHint: $('galleryHint'),
+    viewer: $('viewer'), viewerBack: $('viewerBack'), viewerMeta: $('viewerMeta'), viewerImg: $('viewerImg'),
+    deleteBtn: $('deleteBtn'), rotLeft: $('rotLeft'), rotRight: $('rotRight'), saveOneBtn: $('saveOneBtn'),
+    settings: $('settings'), settingsBack: $('settingsBack'), fixSwitch: $('fixSwitch'),
+    qualitySeg: $('qualitySeg'), resInfo: $('resInfo'), work: $('work'),
+  };
+
+  // ---- 設定（端末ローカル） ----
+  const settings = { fix: true, quality: 0.95 };
+  try {
+    const s = JSON.parse(localStorage.getItem('gyrooff.settings') || '{}');
+    if (typeof s.fix === 'boolean') settings.fix = s.fix;
+    if (typeof s.quality === 'number') settings.quality = s.quality;
+  } catch (e) {}
+  function saveSettings() { try { localStorage.setItem('gyrooff.settings', JSON.stringify(settings)); } catch (e) {} }
+  function renderSettings() {
+    els.fixSwitch.setAttribute('aria-checked', String(settings.fix));
+    for (const b of els.qualitySeg.querySelectorAll('button')) {
+      b.setAttribute('aria-pressed', String(Number(b.dataset.q) === settings.quality));
+    }
+    updateArrow();
+  }
+  els.fixSwitch.addEventListener('click', () => { settings.fix = !settings.fix; saveSettings(); renderSettings(); });
+  els.qualitySeg.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    settings.quality = Number(b.dataset.q); saveSettings(); renderSettings();
+  });
+
+  // ---- 写真の一時保存（IndexedDB） ----
+  let dbp = null;
+  function openDB() {
+    if (dbp) return dbp;
+    dbp = new Promise((resolve) => {
+      try {
+        const req = indexedDB.open('gyrooff', 1);
+        req.onupgradeneeded = () => { req.result.createObjectStore('shots', { keyPath: 'id' }); };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      } catch (e) { resolve(null); }
+    });
+    return dbp;
+  }
+  async function dbPut(shot) {
+    const db = await openDB(); if (!db) return;
+    try {
+      const tx = db.transaction('shots', 'readwrite');
+      tx.objectStore('shots').put({ id: shot.id, blob: shot.blob, w: shot.w, h: shot.h, ts: shot.ts, saved: shot.saved });
+    } catch (e) {}
+  }
+  async function dbDelete(id) {
+    const db = await openDB(); if (!db) return;
+    try { db.transaction('shots', 'readwrite').objectStore('shots').delete(id); } catch (e) {}
+  }
+  async function dbAll() {
+    const db = await openDB(); if (!db) return [];
+    return new Promise((resolve) => {
+      try {
+        const req = db.transaction('shots', 'readonly').objectStore('shots').getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      } catch (e) { resolve([]); }
+    });
+  }
+
+  // ---- 状態 ----
+  const shots = []; // {id, blob, url, w, h, ts, saved}
+  let stream = null;
+  let facing = 'environment';
+  let currentId = null;
+  let wakeLock = null;
+
+  function show(section) {
+    for (const s of [els.start, els.cam, els.gallery, els.viewer, els.settings]) s.hidden = (s !== section);
+  }
+  let statusTimer = 0;
+  function status(msg, ms = 2200) {
+    els.status.textContent = msg; els.status.hidden = false;
+    clearTimeout(statusTimer);
+    if (ms) statusTimer = setTimeout(() => { els.status.hidden = true; }, ms);
+  }
+
+  // ---- 画面の回転角（センサーではなく、ブラウザのUI向き） ----
+  function screenAngle() {
+    let a = 0;
+    if (screen.orientation && typeof screen.orientation.angle === 'number') a = screen.orientation.angle;
+    else if (typeof window.orientation === 'number') a = window.orientation;
+    a = ((Math.round(a / 90) * 90) % 360 + 360) % 360;
+    return a;
+  }
+  function updateArrow() {
+    const a = settings.fix ? screenAngle() : 0;
+    els.upArrow.style.transform = `rotate(${-a}deg)`;
+    els.upLabel.textContent = settings.fix ? '写真の上' : '見たまま保存';
+  }
+  window.addEventListener('orientationchange', () => setTimeout(updateArrow, 50));
+  if (screen.orientation) screen.orientation.addEventListener('change', updateArrow);
+  window.addEventListener('resize', updateArrow);
+
+  // ---- カメラ ----
+  async function startCamera() {
+    stopCamera();
+    const constraints = {
+      audio: false,
+      video: { facingMode: { ideal: facing }, width: { ideal: 4032 }, height: { ideal: 3024 } },
+    };
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (e1) {
+      // 解像度指定で失敗する端末向けに、条件を緩めてもう一度
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: facing } } });
+    }
+    els.video.srcObject = stream;
+    els.video.classList.toggle('mirror', facing === 'user');
+    await new Promise((resolve) => {
+      if (els.video.readyState >= 2) return resolve();
+      els.video.onloadedmetadata = () => resolve();
+      setTimeout(resolve, 3000);
+    });
+    try { await els.video.play(); } catch (e) {}
+    const track = stream.getVideoTracks()[0];
+    const st = track && track.getSettings ? track.getSettings() : {};
+    const w = st.width || els.video.videoWidth, h = st.height || els.video.videoHeight;
+    if (w && h) els.resInfo.textContent = `${w} × ${h}（${(w * h / 1e6).toFixed(1)}メガピクセル）`;
+    if (track) track.addEventListener('ended', () => { status('カメラが止まりました。再接続します'); restartSoon(); });
+  }
+  function stopCamera() {
+    if (stream) { for (const t of stream.getTracks()) t.stop(); }
+    stream = null; els.video.srcObject = null;
+  }
+  let restartTimer = 0;
+  function restartSoon() {
+    clearTimeout(restartTimer);
+    restartTimer = setTimeout(() => { if (!els.cam.hidden) startCamera().catch(() => {}); }, 600);
+  }
+  async function requestWakeLock() {
+    try { if ('wakeLock' in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      wakeLock = null; requestWakeLock();
+      if (!els.cam.hidden && (!stream || !stream.active)) restartSoon();
+    }
+  });
+
+  els.startBtn.addEventListener('click', async () => {
+    els.startErr.hidden = true;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      els.startErr.textContent = 'このブラウザではカメラが使えません。iPhoneはSafariで開いてください。';
+      els.startErr.hidden = false; return;
+    }
+    els.startBtn.disabled = true; els.startBtn.textContent = 'カメラを起動中…';
+    try {
+      show(els.cam);
+      await startCamera();
+      requestWakeLock();
+      updateArrow();
+      try { localStorage.setItem('gyrooff.started', '1'); } catch (e) {}
+    } catch (e) {
+      show(els.start);
+      const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+      els.startErr.textContent = denied
+        ? 'カメラの使用が許可されていません。Safariのアドレスバー左の「ぁあ」→「Webサイトの設定」→ カメラ を「許可」にしてから、もう一度押してください。'
+        : `カメラを開けませんでした（${e && e.name ? e.name : '不明なエラー'}）。他のアプリがカメラを使っていないか確認してください。`;
+      els.startErr.hidden = false;
+    } finally {
+      els.startBtn.disabled = false; els.startBtn.textContent = 'カメラをはじめる';
+    }
+  });
+
+  els.flipBtn.addEventListener('click', async () => {
+    facing = facing === 'environment' ? 'user' : 'environment';
+    try { await startCamera(); } catch (e) { status('切り替えできませんでした'); }
+  });
+
+  // ---- 撮影 ----
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function fileName(ts) {
+    const d = new Date(ts);
+    return `photo_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jpg`;
+  }
+  function canvasToBlob(canvas, quality) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((b) => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/jpeg', quality);
+    });
+  }
+  // 映像フレームを、画面の回転ぶんだけ戻してセンサーそのままの向きで描く
+  function drawRotated(source, sw, sh, angle) {
+    const swap = angle === 90 || angle === 270;
+    const c = els.work;
+    c.width = swap ? sh : sw; c.height = swap ? sw : sh;
+    const ctx = c.getContext('2d');
+    ctx.save();
+    ctx.translate(c.width / 2, c.height / 2);
+    ctx.rotate(angle * Math.PI / 180);
+    ctx.drawImage(source, -sw / 2, -sh / 2, sw, sh);
+    ctx.restore();
+    return c;
+  }
+  let shooting = false;
+  els.shutter.addEventListener('click', async () => {
+    if (shooting || !stream) return;
+    const vw = els.video.videoWidth, vh = els.video.videoHeight;
+    if (!vw || !vh) { status('まだ映像が来ていません'); return; }
+    shooting = true; els.shutter.disabled = true;
+    els.flash.classList.remove('on'); void els.flash.offsetWidth; els.flash.classList.add('on');
+    try {
+      const angle = settings.fix ? screenAngle() : 0;
+      const c = drawRotated(els.video, vw, vh, angle);
+      const blob = await canvasToBlob(c, settings.quality);
+      const shot = { id: String(Date.now()) + Math.random().toString(16).slice(2, 6), blob, url: URL.createObjectURL(blob), w: c.width, h: c.height, ts: Date.now(), saved: false };
+      shots.push(shot);
+      dbPut(shot);
+      renderThumb();
+      status(`${c.width} × ${c.height} で撮影しました`);
+    } catch (e) {
+      status('撮影に失敗しました。もう一度押してください');
+    } finally {
+      shooting = false; els.shutter.disabled = false;
+    }
+  });
+
+  function renderThumb() {
+    const last = shots[shots.length - 1];
+    const unsaved = shots.filter((s) => !s.saved).length;
+    if (last) { els.thumbImg.src = last.url; els.thumbImg.hidden = false; } else { els.thumbImg.hidden = true; }
+    els.thumbCount.textContent = String(unsaved);
+    els.thumbCount.hidden = unsaved === 0;
+  }
+
+  // ---- 保存（共有シート経由で写真アプリへ） ----
+  function toFiles(list) { return list.map((s) => new File([s.blob], fileName(s.ts), { type: 'image/jpeg', lastModified: s.ts })); }
+  async function saveShots(list) {
+    if (!list.length) return false;
+    const files = toFiles(list);
+    if (navigator.share && (!navigator.canShare || navigator.canShare({ files }))) {
+      try {
+        await navigator.share({ files });
+        for (const s of list) { s.saved = true; dbPut(s); }
+        return true;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return false; // 共有メニューを閉じただけ
+      }
+    }
+    // 共有が使えないブラウザ向け：1枚ずつダウンロード
+    for (const f of files) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(f); a.download = f.name; a.rel = 'noopener';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+    for (const s of list) { s.saved = true; dbPut(s); }
+    return true;
+  }
+
+  // ---- ギャラリー ----
+  function renderGallery() {
+    els.grid.textContent = '';
+    const unsaved = shots.filter((s) => !s.saved);
+    els.galleryCount.textContent = shots.length ? `${shots.length}枚` : '';
+    els.galleryEmpty.hidden = shots.length > 0;
+    els.saveAllBtn.disabled = unsaved.length === 0;
+    els.saveAllBtn.textContent = unsaved.length ? `${unsaved.length}枚を保存` : '保存ずみ';
+    els.galleryHint.hidden = shots.length === 0;
+    for (const s of [...shots].reverse()) {
+      const b = document.createElement('button'); b.type = 'button'; b.dataset.id = s.id;
+      const img = document.createElement('img'); img.src = s.url; img.alt = '';
+      const tag = document.createElement('span'); tag.className = 'tag' + (s.saved ? ' ok' : '');
+      tag.textContent = s.saved ? '保存ずみ' : '未保存';
+      b.append(img, tag); els.grid.appendChild(b);
+    }
+  }
+  els.thumbBtn.addEventListener('click', () => { renderGallery(); show(els.gallery); });
+  els.galleryBack.addEventListener('click', () => { show(els.cam); renderThumb(); if (!stream || !stream.active) restartSoon(); });
+  els.saveAllBtn.addEventListener('click', async () => {
+    const ok = await saveShots(shots.filter((s) => !s.saved));
+    renderGallery();
+    if (ok) renderThumb();
+  });
+  els.grid.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    openViewer(b.dataset.id);
+  });
+
+  // ---- 1枚表示 ----
+  function openViewer(id) {
+    const s = shots.find((x) => x.id === id); if (!s) return;
+    currentId = id;
+    els.viewerImg.src = s.url;
+    const d = new Date(s.ts);
+    els.viewerMeta.textContent = `${s.w} × ${s.h} ・ ${pad(d.getHours())}:${pad(d.getMinutes())}${s.saved ? ' ・ 保存ずみ' : ''}`;
+    show(els.viewer);
+  }
+  els.viewerBack.addEventListener('click', () => { renderGallery(); show(els.gallery); });
+  els.saveOneBtn.addEventListener('click', async () => {
+    const s = shots.find((x) => x.id === currentId); if (!s) return;
+    const ok = await saveShots([s]);
+    if (ok) openViewer(currentId);
+  });
+  els.deleteBtn.addEventListener('click', () => {
+    const i = shots.findIndex((x) => x.id === currentId); if (i < 0) return;
+    const s = shots[i];
+    if (!s.saved && els.deleteBtn.dataset.confirm !== s.id) {
+      els.deleteBtn.dataset.confirm = s.id; els.deleteBtn.textContent = '未保存です。本当に削除'; return;
+    }
+    URL.revokeObjectURL(s.url); shots.splice(i, 1); dbDelete(s.id);
+    els.deleteBtn.textContent = '削除'; delete els.deleteBtn.dataset.confirm;
+    renderGallery(); renderThumb(); show(els.gallery);
+  });
+  els.viewerBack.addEventListener('click', () => { els.deleteBtn.textContent = '削除'; delete els.deleteBtn.dataset.confirm; });
+  async function rotateCurrent(deg) {
+    const s = shots.find((x) => x.id === currentId); if (!s) return;
+    const img = new Image();
+    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = s.url; });
+    const c = drawRotated(img, img.naturalWidth, img.naturalHeight, (deg + 360) % 360);
+    const blob = await canvasToBlob(c, Math.max(settings.quality, 0.92));
+    URL.revokeObjectURL(s.url);
+    s.blob = blob; s.url = URL.createObjectURL(blob); s.w = c.width; s.h = c.height; s.saved = false;
+    dbPut(s); openViewer(s.id); renderThumb();
+  }
+  els.rotLeft.addEventListener('click', () => rotateCurrent(-90).catch(() => {}));
+  els.rotRight.addEventListener('click', () => rotateCurrent(90).catch(() => {}));
+
+  // ---- 設定画面 ----
+  els.gearBtn.addEventListener('click', () => { renderSettings(); show(els.settings); });
+  els.settingsBack.addEventListener('click', () => { show(els.cam); if (!stream || !stream.active) restartSoon(); });
+
+  // ---- 起動：前回の未保存写真を復元 ----
+  (async () => {
+    renderSettings();
+    const saved = await dbAll();
+    saved.sort((a, b) => a.ts - b.ts);
+    for (const r of saved) {
+      if (!(r.blob instanceof Blob)) continue;
+      shots.push({ id: r.id, blob: r.blob, url: URL.createObjectURL(r.blob), w: r.w, h: r.h, ts: r.ts, saved: !!r.saved });
+    }
+    renderThumb();
+    const unsaved = shots.filter((s) => !s.saved).length;
+    if (unsaved) {
+      const p = document.createElement('p'); p.className = 'note';
+      p.textContent = `前回の未保存の写真が ${unsaved} 枚あります。カメラを開いて左下のサムネイルから保存できます。`;
+      els.startBtn.insertAdjacentElement('afterend', p);
+    }
+  })();
+})();
+</script>
+</body>
+</html>
