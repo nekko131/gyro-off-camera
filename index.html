@@ -257,6 +257,10 @@
       <button class="switch" id="fixSwitch" role="switch" aria-checked="true" aria-label="向きを固定する"></button>
     </div>
     <div class="row">
+      <div><div class="label">シャッター音</div><div class="desc">撮影のときに「カシャッ」と鳴らします。iPhoneがマナーモード（消音スイッチがオン）のときは鳴りません。</div></div>
+      <button class="switch" id="soundSwitch" role="switch" aria-checked="true" aria-label="シャッター音"></button>
+    </div>
+    <div class="row">
       <div><div class="label">写真の形</div><div class="desc">「正方形」はまん中を切り出します。ファインダーに切り出す範囲の枠が出ます。</div></div>
       <div class="seg" id="aspectSeg">
         <button type="button" data-a="full" aria-pressed="true">縦長</button>
@@ -324,22 +328,24 @@
     viewer: $('viewer'), viewerBack: $('viewerBack'), viewerMeta: $('viewerMeta'), viewerImg: $('viewerImg'),
     deleteBtn: $('deleteBtn'), rotLeft: $('rotLeft'), rotRight: $('rotRight'), saveOneBtn: $('saveOneBtn'),
     settings: $('settings'), settingsBack: $('settingsBack'), fixSwitch: $('fixSwitch'),
-    qualitySeg: $('qualitySeg'), resInfo: $('resInfo'), work: $('work'),
+    qualitySeg: $('qualitySeg'), resInfo: $('resInfo'), work: $('work'), soundSwitch: $('soundSwitch'),
     sizeSeg: $('sizeSeg'), sizeInput: $('sizeInput'), sizeInfo: $('sizeInfo'), aspectSeg: $('aspectSeg'), guide: $('guide'),
   };
 
   // ---- 設定（端末ローカル） ----
-  const settings = { fix: true, quality: 0.95, maxEdge: 0, aspect: 'full' };
+  const settings = { fix: true, quality: 0.95, maxEdge: 0, aspect: 'full', sound: true };
   try {
     const s = JSON.parse(localStorage.getItem('gyrooff.settings') || '{}');
     if (typeof s.fix === 'boolean') settings.fix = s.fix;
     if (typeof s.quality === 'number') settings.quality = s.quality;
     if (typeof s.maxEdge === 'number' && s.maxEdge >= 0) settings.maxEdge = s.maxEdge;
     if (s.aspect === 'square' || s.aspect === 'full') settings.aspect = s.aspect;
+    if (typeof s.sound === 'boolean') settings.sound = s.sound;
   } catch (e) {}
   function saveSettings() { try { localStorage.setItem('gyrooff.settings', JSON.stringify(settings)); } catch (e) {} }
   function renderSettings() {
     els.fixSwitch.setAttribute('aria-checked', String(settings.fix));
+    els.soundSwitch.setAttribute('aria-checked', String(settings.sound));
     for (const b of els.qualitySeg.querySelectorAll('button')) {
       b.setAttribute('aria-pressed', String(Number(b.dataset.q) === settings.quality));
     }
@@ -355,6 +361,46 @@
     updateArrow();
   }
   els.fixSwitch.addEventListener('click', () => { settings.fix = !settings.fix; saveSettings(); renderSettings(); });
+  els.soundSwitch.addEventListener('click', () => {
+    settings.sound = !settings.sound; saveSettings(); renderSettings();
+    if (settings.sound) playShutter(); // 試し聞き
+  });
+
+  // ---- シャッター音（音声ファイルなし。その場で合成する） ----
+  let audioCtx = null;
+  let noiseBuf = null;
+  function getAudio() {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      try { audioCtx = new AC(); } catch (e) { return null; }
+      const len = Math.floor(audioCtx.sampleRate * 0.12);
+      noiseBuf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    return audioCtx;
+  }
+  // 1回の「カチッ」：ノイズを帯域フィルタに通して短く減衰させる
+  function click(ctx, t, freq, gain, decay) {
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = freq; bp.Q.value = 0.9;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    src.connect(bp); bp.connect(g); g.connect(ctx.destination);
+    src.start(t); src.stop(t + decay + 0.02);
+  }
+  function playShutter() {
+    if (!settings.sound) return;
+    const ctx = getAudio(); if (!ctx) return;
+    const t = ctx.currentTime + 0.005;
+    click(ctx, t, 3200, 0.9, 0.035);         // カシャ（幕が開く）
+    click(ctx, t + 0.006, 900, 0.5, 0.05);   // 低い胴鳴り
+    click(ctx, t + 0.085, 2600, 0.7, 0.045); // ッ（幕が閉じる）
+  }
   els.aspectSeg.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     settings.aspect = b.dataset.a; saveSettings(); renderSettings();
@@ -527,6 +573,7 @@
       els.startErr.textContent = 'このブラウザではカメラが使えません。iPhoneはSafariで開いてください。';
       els.startErr.hidden = false; return;
     }
+    getAudio();
     els.startBtn.disabled = true; els.startBtn.textContent = 'カメラを起動中…';
     try {
       show(els.cam);
@@ -590,6 +637,7 @@
     const vw = els.video.videoWidth, vh = els.video.videoHeight;
     if (!vw || !vh) { status('まだ映像が来ていません'); return; }
     shooting = true; els.shutter.disabled = true;
+    playShutter();
     els.flash.classList.remove('on'); void els.flash.offsetWidth; els.flash.classList.add('on');
     try {
       const angle = settings.fix ? screenAngle() : 0;
