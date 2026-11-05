@@ -262,12 +262,11 @@
       <button class="switch" id="soundSwitch" role="switch" aria-checked="true" aria-label="シャッター音"></button>
     </div>
     <div class="row" style="flex-wrap: wrap">
-      <div style="flex: 1 1 100%"><div class="label">画像のサイズ</div><div class="desc">正方形の一辺のピクセル数。「最大」はカメラで撮れるいちばん大きい正方形。ネット出品用なら「中」で十分です。</div></div>
+      <div style="flex: 1 1 100%"><div class="label">画像のサイズ</div><div class="desc">正方形の一辺のピクセル数。「標準」がいちばん速く軽く動きます。ネット出品用なら標準で十分です。「高画質」はカメラを重い設定で開くので、起動と動作が遅くなります。</div></div>
       <div class="seg" id="sizeSeg">
-        <button type="button" data-s="0" aria-pressed="true">最大</button>
-        <button type="button" data-s="3000" aria-pressed="false">大 3000</button>
-        <button type="button" data-s="2000" aria-pressed="false">中 2000</button>
-        <button type="button" data-s="1200" aria-pressed="false">小 1200</button>
+        <button type="button" data-s="3024" aria-pressed="false">高画質 3024</button>
+        <button type="button" data-s="1440" aria-pressed="true">標準 1440</button>
+        <button type="button" data-s="1080" aria-pressed="false">小 1080</button>
       </div>
       <label class="desc" style="display:flex;align-items:center;gap:8px;flex:1 1 100%">自分で決める：
         <input id="sizeInput" type="number" inputmode="numeric" min="200" max="8000" step="100" placeholder="例 2500" style="width:7em;font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:#16181c;color:var(--fg)"> px
@@ -327,12 +326,13 @@
   };
 
   // ---- 設定（端末ローカル） ----
-  const settings = { fix: true, quality: 0.95, maxEdge: 0, aspect: 'square', sound: true };
+  const settings = { fix: true, quality: 0.95, maxEdge: 1440, aspect: 'square', sound: true, v: 2 };
   try {
     const s = JSON.parse(localStorage.getItem('gyrooff.settings') || '{}');
     if (typeof s.fix === 'boolean') settings.fix = s.fix;
     if (typeof s.quality === 'number') settings.quality = s.quality;
-    if (typeof s.maxEdge === 'number' && s.maxEdge >= 0) settings.maxEdge = s.maxEdge;
+    if (typeof s.maxEdge === 'number' && s.maxEdge > 0) settings.maxEdge = s.maxEdge;
+    // 旧版の初期値「最大(0)」は重いので標準(1440)へ。旧版で選んだ大きい数字もそのまま残す
     if (typeof s.sound === 'boolean') settings.sound = s.sound;
   } catch (e) {}
   function saveSettings() { try { localStorage.setItem('gyrooff.settings', JSON.stringify(settings)); } catch (e) {} }
@@ -502,10 +502,11 @@
   async function startCamera() {
     stopCamera();
     // 正方形の一辺 = 映像の短い辺。設定サイズに足りる分だけ要求する（大きいほど起動が重い）
-    const short = settings.maxEdge > 0 ? Math.min(3024, settings.maxEdge) : 3024;
+    const short = Math.max(1440, Math.min(3024, settings.maxEdge || 1440));
+    const t0 = performance.now();
     const constraints = {
       audio: false,
-      video: { facingMode: { ideal: facing }, width: { ideal: Math.round(short * 4 / 3) }, height: { ideal: short } },
+      video: { facingMode: { ideal: facing }, width: { ideal: Math.round(short * 4 / 3) }, height: { ideal: short }, frameRate: { ideal: 30, max: 30 } },
     };
     try {
       stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -529,7 +530,8 @@
     const track = stream.getVideoTracks()[0];
     const st = track && track.getSettings ? track.getSettings() : {};
     const w = st.width || els.video.videoWidth, h = st.height || els.video.videoHeight;
-    if (w && h) { camW = w; camH = h; els.resInfo.textContent = `${w} × ${h}（${(w * h / 1e6).toFixed(1)}メガピクセル）`; renderSizeInfo(); }
+    const sec = ((performance.now() - t0) / 1000).toFixed(1);
+    if (w && h) { camW = w; camH = h; els.resInfo.textContent = `${w} × ${h}（${(w * h / 1e6).toFixed(1)}メガピクセル）・カメラを開くのに ${sec} 秒`; renderSizeInfo(); }
     if (track) track.addEventListener('ended', () => { status('カメラが止まりました。再接続します'); restartSoon(); });
   }
   function stopCamera() {
