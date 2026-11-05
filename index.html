@@ -373,13 +373,17 @@
     if (!audioCtx) {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return null;
-      try { audioCtx = new AC(); } catch (e) { return null; }
-      const len = Math.floor(audioCtx.sampleRate * 0.12);
-      noiseBuf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
-      const d = noiseBuf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      try {
+        audioCtx = new AC();
+        const len = Math.floor(audioCtx.sampleRate * 0.12);
+        noiseBuf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+        const d = noiseBuf.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      } catch (e) { audioCtx = null; noiseBuf = null; return null; }
     }
-    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    try {
+      if (audioCtx.state === 'suspended') { const p = audioCtx.resume(); if (p && p.catch) p.catch(() => {}); }
+    } catch (e) {}
     return audioCtx;
   }
   // 1回の「カチッ」：ノイズを帯域フィルタに通して短く減衰させる
@@ -395,11 +399,13 @@
   }
   function playShutter() {
     if (!settings.sound) return;
-    const ctx = getAudio(); if (!ctx) return;
-    const t = ctx.currentTime + 0.005;
-    click(ctx, t, 3200, 0.9, 0.035);         // カシャ（幕が開く）
-    click(ctx, t + 0.006, 900, 0.5, 0.05);   // 低い胴鳴り
-    click(ctx, t + 0.085, 2600, 0.7, 0.045); // ッ（幕が閉じる）
+    try {
+      const ctx = getAudio(); if (!ctx || !noiseBuf) return;
+      const t = ctx.currentTime + 0.005;
+      click(ctx, t, 3200, 0.9, 0.035);         // カシャ（幕が開く）
+      click(ctx, t + 0.006, 900, 0.5, 0.05);   // 低い胴鳴り
+      click(ctx, t + 0.085, 2600, 0.7, 0.045); // ッ（幕が閉じる）
+    } catch (e) { /* 音が出せなくても撮影は止めない */ }
   }
   els.aspectSeg.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
@@ -573,7 +579,6 @@
       els.startErr.textContent = 'このブラウザではカメラが使えません。iPhoneはSafariで開いてください。';
       els.startErr.hidden = false; return;
     }
-    getAudio();
     els.startBtn.disabled = true; els.startBtn.textContent = 'カメラを起動中…';
     try {
       show(els.cam);
