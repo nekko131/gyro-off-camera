@@ -517,9 +517,11 @@
   // ---- カメラ ----
   async function startCamera() {
     stopCamera();
+    // 正方形の一辺 = 映像の短い辺。設定サイズに足りる分だけ要求する（大きいほど起動が重い）
+    const short = settings.maxEdge > 0 ? Math.min(3024, settings.maxEdge) : 3024;
     const constraints = {
       audio: false,
-      video: { facingMode: { ideal: facing }, width: { ideal: 4032 }, height: { ideal: 3024 } },
+      video: { facingMode: { ideal: facing }, width: { ideal: Math.round(short * 4 / 3) }, height: { ideal: short } },
     };
     try {
       stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -529,12 +531,17 @@
     }
     els.video.srcObject = stream;
     els.video.classList.toggle('mirror', facing === 'user');
+    // すぐ再生を始め、映像の大きさが分かった時点で先へ進む（最大1秒だけ待つ）
+    const playing = els.video.play();
+    if (playing && playing.catch) playing.catch(() => {});
     await new Promise((resolve) => {
-      if (els.video.readyState >= 2) return resolve();
-      els.video.onloadedmetadata = () => resolve();
-      setTimeout(resolve, 3000);
+      if (els.video.videoWidth) return resolve();
+      const done = () => { els.video.removeEventListener('loadedmetadata', done); els.video.removeEventListener('playing', done); resolve(); };
+      els.video.addEventListener('loadedmetadata', done);
+      els.video.addEventListener('playing', done);
+      setTimeout(done, 1000);
     });
-    try { await els.video.play(); } catch (e) {}
+    updateGuide();
     const track = stream.getVideoTracks()[0];
     const st = track && track.getSettings ? track.getSettings() : {};
     const w = st.width || els.video.videoWidth, h = st.height || els.video.videoHeight;
@@ -560,7 +567,8 @@
     }
   });
 
-  els.startBtn.addEventListener('click', async () => {
+  els.startBtn.addEventListener('click', () => { openCamera(); });
+  async function openCamera() {
     els.startErr.hidden = true;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       els.startErr.textContent = 'このブラウザではカメラが使えません。iPhoneはSafariで開いてください。';
@@ -583,7 +591,7 @@
     } finally {
       els.startBtn.disabled = false; els.startBtn.textContent = 'カメラをはじめる';
     }
-  });
+  }
 
   els.flipBtn.addEventListener('click', async () => {
     facing = facing === 'environment' ? 'user' : 'environment';
@@ -664,7 +672,7 @@
     if (navigator.share && (!navigator.canShare || navigator.canShare({ files }))) {
       try {
         await navigator.share({ files });
-        for (const s of list) { s.saved = true; dbPut(s); }
+        for (const s of list) { s.saved = true; dbDelete(s.id); }
         return true;
       } catch (e) {
         if (e && e.name === 'AbortError') return false; // 共有メニューを閉じただけ
@@ -677,7 +685,7 @@
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     }
-    for (const s of list) { s.saved = true; dbPut(s); }
+    for (const s of list) { s.saved = true; dbDelete(s.id); }
     return true;
   }
 
@@ -751,20 +759,32 @@
 
   // ---- 設定画面 ----
   els.gearBtn.addEventListener('click', () => { renderSettings(); show(els.settings); });
-  els.settingsBack.addEventListener('click', () => { show(els.cam); setTimeout(updateGuide, 50); if (!stream || !stream.active) restartSoon(); });
+  let edgeAtOpen = settings.maxEdge;
+  els.gearBtn.addEventListener('click', () => { edgeAtOpen = settings.maxEdge; });
+  els.settingsBack.addEventListener('click', () => {
+    show(els.cam); setTimeout(updateGuide, 50);
+    if (!stream || !stream.active || settings.maxEdge !== edgeAtOpen) restartSoon();
+  });
 
   // ---- 起動：前回の未保存写真を復元 ----
   (async () => {
     renderSettings();
+    let auto = false;
+    try { auto = localStorage.getItem('gyrooff.started') === '1'; } catch (e) {}
+    if (auto && navigator.permissions && navigator.permissions.query) {
+      try { const p = await navigator.permissions.query({ name: 'camera' }); auto = p.state === 'granted'; } catch (e) { auto = false; }
+    } else auto = false;
+    if (auto) openCamera();
     const saved = await dbAll();
     saved.sort((a, b) => a.ts - b.ts);
     for (const r of saved) {
       if (!(r.blob instanceof Blob)) continue;
+      if (r.saved) { dbDelete(r.id); continue; }
       shots.push({ id: r.id, blob: r.blob, url: URL.createObjectURL(r.blob), w: r.w, h: r.h, ts: r.ts, saved: !!r.saved });
     }
     renderThumb();
     const unsaved = shots.filter((s) => !s.saved).length;
-    if (unsaved) {
+    if (unsaved && !auto) {
       const p = document.createElement('p'); p.className = 'note';
       p.textContent = `前回の未保存の写真が ${unsaved} 枚あります。カメラを開いて左下のサムネイルから保存できます。`;
       els.startBtn.insertAdjacentElement('afterend', p);
