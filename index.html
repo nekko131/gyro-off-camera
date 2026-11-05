@@ -139,7 +139,7 @@
   .textbtn:disabled { opacity: .4; }
 
   .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-  .grid button { position: relative; aspect-ratio: 3 / 4; max-width: 100%; border-radius: 10px; overflow: hidden; background: #16181c; }
+  .grid button { position: relative; aspect-ratio: 1 / 1; max-width: 100%; border-radius: 10px; overflow: hidden; background: #16181c; }
   .grid img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .grid .tag { position: absolute; left: 6px; bottom: 6px; font-size: 11px; padding: 2px 6px; border-radius: 6px; background: rgba(0,0,0,.6); }
   .grid .tag.ok { color: var(--ok); }
@@ -180,7 +180,7 @@
 <!-- 開始画面 -->
 <section id="start">
   <h1>ジャイロOFFカメラ</h1>
-  <p>傾きセンサー（ジャイロ）を見ないカメラです。真下に向けて撮っても、写真の向きが勝手に横になったり逆さになったりしません。画面に映っているとおりに保存します。</p>
+  <p>傾きセンサー（ジャイロ）を見ない正方形カメラです。真下に向けて撮っても、写真の向きが勝手に横になったり逆さになったりしません。枠の中を、画面に映っているとおりに保存します。</p>
   <button class="big" id="startBtn" type="button">カメラをはじめる</button>
   <p class="note">はじめて開くとカメラの使用許可を聞かれます。「許可」を選んでください。</p>
   <p class="note">Safariの共有ボタン →「ホーム画面に追加」で、ふつうのアプリのように使えます。</p>
@@ -260,15 +260,8 @@
       <div><div class="label">シャッター音</div><div class="desc">撮影のときに「カシャッ」と鳴らします。iPhoneがマナーモード（消音スイッチがオン）のときは鳴りません。</div></div>
       <button class="switch" id="soundSwitch" role="switch" aria-checked="true" aria-label="シャッター音"></button>
     </div>
-    <div class="row">
-      <div><div class="label">写真の形</div><div class="desc">「正方形」はまん中を切り出します。ファインダーに切り出す範囲の枠が出ます。</div></div>
-      <div class="seg" id="aspectSeg">
-        <button type="button" data-a="full" aria-pressed="true">縦長</button>
-        <button type="button" data-a="square" aria-pressed="false">正方形</button>
-      </div>
-    </div>
     <div class="row" style="flex-wrap: wrap">
-      <div style="flex: 1 1 100%"><div class="label">画像のサイズ</div><div class="desc">長い辺のピクセル数。「最大」はカメラの解像度そのまま。ネット出品用なら「大」で十分です。</div></div>
+      <div style="flex: 1 1 100%"><div class="label">画像のサイズ</div><div class="desc">正方形の一辺のピクセル数。「最大」はカメラで撮れるいちばん大きい正方形。ネット出品用なら「中」で十分です。</div></div>
       <div class="seg" id="sizeSeg">
         <button type="button" data-s="0" aria-pressed="true">最大</button>
         <button type="button" data-s="3000" aria-pressed="false">大 3000</button>
@@ -298,7 +291,7 @@
       </ul>
       <h3>使い方</h3>
       <ol>
-        <li>まん中の白いボタンで撮影。何枚でも続けて撮れます。</li>
+        <li>白い枠の中が正方形の写真になります。まん中の白いボタンで撮影。何枚でも続けて撮れます。</li>
         <li>左下のサムネイルから一覧を開き、「まとめて保存」。</li>
         <li>出てきた共有メニューで「画像を保存」を選ぶと、写真アプリに全部入ります。</li>
       </ol>
@@ -329,17 +322,16 @@
     deleteBtn: $('deleteBtn'), rotLeft: $('rotLeft'), rotRight: $('rotRight'), saveOneBtn: $('saveOneBtn'),
     settings: $('settings'), settingsBack: $('settingsBack'), fixSwitch: $('fixSwitch'),
     qualitySeg: $('qualitySeg'), resInfo: $('resInfo'), work: $('work'), soundSwitch: $('soundSwitch'),
-    sizeSeg: $('sizeSeg'), sizeInput: $('sizeInput'), sizeInfo: $('sizeInfo'), aspectSeg: $('aspectSeg'), guide: $('guide'),
+    sizeSeg: $('sizeSeg'), sizeInput: $('sizeInput'), sizeInfo: $('sizeInfo'), guide: $('guide'),
   };
 
   // ---- 設定（端末ローカル） ----
-  const settings = { fix: true, quality: 0.95, maxEdge: 0, aspect: 'full', sound: true };
+  const settings = { fix: true, quality: 0.95, maxEdge: 0, aspect: 'square', sound: true };
   try {
     const s = JSON.parse(localStorage.getItem('gyrooff.settings') || '{}');
     if (typeof s.fix === 'boolean') settings.fix = s.fix;
     if (typeof s.quality === 'number') settings.quality = s.quality;
     if (typeof s.maxEdge === 'number' && s.maxEdge >= 0) settings.maxEdge = s.maxEdge;
-    if (s.aspect === 'square' || s.aspect === 'full') settings.aspect = s.aspect;
     if (typeof s.sound === 'boolean') settings.sound = s.sound;
   } catch (e) {}
   function saveSettings() { try { localStorage.setItem('gyrooff.settings', JSON.stringify(settings)); } catch (e) {} }
@@ -349,7 +341,6 @@
     for (const b of els.qualitySeg.querySelectorAll('button')) {
       b.setAttribute('aria-pressed', String(Number(b.dataset.q) === settings.quality));
     }
-    for (const b of els.aspectSeg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.a === settings.aspect));
     updateGuide();
     let preset = false;
     for (const b of els.sizeSeg.querySelectorAll('button')) {
@@ -407,10 +398,6 @@
       click(ctx, t + 0.085, 2600, 0.7, 0.045); // ッ（幕が閉じる）
     } catch (e) { /* 音が出せなくても撮影は止めない */ }
   }
-  els.aspectSeg.addEventListener('click', (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    settings.aspect = b.dataset.a; saveSettings(); renderSettings();
-  });
   // 正方形モード: 映像を全体表示にして、切り出す範囲の枠を重ねる
   function updateGuide() {
     const sq = settings.aspect === 'square';
