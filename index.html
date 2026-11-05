@@ -54,12 +54,14 @@
 
   /* ---- ファインダー ---- */
   #cam { position: fixed; inset: 0; background: #000; }
-  #video {
-    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000;
+  /* 正方形の窓。cover で映像のまん中の正方形だけが映る＝保存される範囲と同じ */
+  #vf {
+    position: absolute; left: 0; right: 0; top: 0; bottom: 0; margin: auto;
+    width: min(100vw, 100vh); height: min(100vw, 100vh);
+    overflow: hidden; background: #111; outline: 1.5px solid rgba(255,255,255,.85);
   }
+  #video { display: block; width: 100%; height: 100%; object-fit: cover; background: #000; }
   #video.mirror { transform: scaleX(-1); }
-  #video.square { object-fit: contain; }
-  #guide { position: absolute; border: 1.5px solid rgba(255,255,255,.85); box-shadow: 0 0 0 9999px rgba(0,0,0,.6); pointer-events: none; }
   #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
   #flash.on { animation: flash 180ms ease-out; }
   @keyframes flash { from { opacity: .85 } to { opacity: 0 } }
@@ -189,8 +191,7 @@
 
 <!-- ファインダー -->
 <section id="cam" hidden>
-  <video id="video" autoplay muted playsinline></video>
-  <div id="guide" hidden></div>
+  <div id="vf"><video id="video" autoplay muted playsinline></video></div>
   <div id="flash"></div>
   <div class="topbar">
     <span class="pill" title="保存される写真の上方向">
@@ -322,7 +323,7 @@
     deleteBtn: $('deleteBtn'), rotLeft: $('rotLeft'), rotRight: $('rotRight'), saveOneBtn: $('saveOneBtn'),
     settings: $('settings'), settingsBack: $('settingsBack'), fixSwitch: $('fixSwitch'),
     qualitySeg: $('qualitySeg'), resInfo: $('resInfo'), work: $('work'), soundSwitch: $('soundSwitch'),
-    sizeSeg: $('sizeSeg'), sizeInput: $('sizeInput'), sizeInfo: $('sizeInfo'), guide: $('guide'),
+    sizeSeg: $('sizeSeg'), sizeInput: $('sizeInput'), sizeInfo: $('sizeInfo'),
   };
 
   // ---- 設定（端末ローカル） ----
@@ -398,22 +399,8 @@
       click(ctx, t + 0.085, 2600, 0.7, 0.045); // ッ（幕が閉じる）
     } catch (e) { /* 音が出せなくても撮影は止めない */ }
   }
-  // 正方形モード: 映像を全体表示にして、切り出す範囲の枠を重ねる
-  function updateGuide() {
-    const sq = settings.aspect === 'square';
-    els.video.classList.toggle('square', sq);
-    const vw = els.video.videoWidth, vh = els.video.videoHeight;
-    if (!sq || !vw || !vh) { els.guide.hidden = true; return; }
-    const r = els.video.getBoundingClientRect();
-    const s = Math.min(r.width / vw, r.height / vh);
-    const dw = vw * s, dh = vh * s, side = Math.min(dw, dh);
-    els.guide.style.width = side + 'px'; els.guide.style.height = side + 'px';
-    els.guide.style.left = (r.width - side) / 2 + 'px'; els.guide.style.top = (r.height - side) / 2 + 'px';
-    els.guide.hidden = false;
-  }
-  window.addEventListener('resize', () => setTimeout(updateGuide, 50));
-  els.video.addEventListener('loadedmetadata', updateGuide);
-  els.video.addEventListener('resize', updateGuide);
+  // ファインダーは CSS だけで正方形になるので、ここで計算することはない
+  function updateGuide() {}
   els.sizeSeg.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     settings.maxEdge = Number(b.dataset.s); saveSettings(); renderSettings();
@@ -423,21 +410,18 @@
     if (v >= 200 && v <= 8000) { settings.maxEdge = v; saveSettings(); renderSettings(); }
   });
   let camW = 0, camH = 0;
+  function squareSide(w, h, maxEdge) {
+    const side = Math.min(w, h);
+    return maxEdge > 0 ? Math.min(side, Math.round(maxEdge)) : side;
+  }
   function outputSize(w, h, maxEdge) {
     const scale = maxEdge > 0 ? Math.min(1, maxEdge / Math.max(w, h)) : 1;
     return { w: Math.round(w * scale), h: Math.round(h * scale), scale };
   }
   function renderSizeInfo() {
     if (!camW) { els.sizeInfo.textContent = ''; return; }
-    const o = outputSize(camW, camH, settings.maxEdge);
-    if (settings.aspect === 'square') {
-      const side = Math.min(o.w, o.h);
-      els.sizeInfo.textContent = `このカメラなら 正方形 ${side} × ${side} で保存されます`;
-    } else {
-      els.sizeInfo.textContent = o.scale < 1
-        ? `このカメラなら ${o.w} × ${o.h} で保存されます`
-        : `縮小なし。カメラの解像度 ${camW} × ${camH} のまま保存されます`;
-    }
+    const side = squareSide(camW, camH, settings.maxEdge);
+    els.sizeInfo.textContent = `このカメラなら 正方形 ${side} × ${side} で保存されます`;
   }
   els.qualitySeg.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
@@ -462,7 +446,7 @@
     const db = await openDB(); if (!db) return;
     try {
       const tx = db.transaction('shots', 'readwrite');
-      tx.objectStore('shots').put({ id: shot.id, blob: shot.blob, w: shot.w, h: shot.h, ts: shot.ts, saved: shot.saved });
+      tx.objectStore('shots').put({ id: shot.id, blob: shot.blob, thumb: shot.thumb || null, w: shot.w, h: shot.h, ts: shot.ts, saved: shot.saved });
     } catch (e) {}
   }
   async function dbDelete(id) {
@@ -624,12 +608,40 @@
     ctx.restore();
     return c;
   }
-  function cropSquare(src) {
-    const side = Math.min(src.width, src.height);
-    if (src.width === src.height) return src;
-    const c = document.createElement('canvas'); c.width = side; c.height = side;
-    c.getContext('2d').drawImage(src, (src.width - side) / 2, (src.height - side) / 2, side, side, 0, 0, side, side);
+  // 作業用キャンバスは2枚だけを使い回す（iPhoneはキャンバスのメモリ上限が厳しい）
+  const thumbCanvas = document.createElement('canvas');
+  function captureSquare(video, vw, vh, angle, maxEdge) {
+    const side = Math.min(vw, vh);
+    const out = squareSide(vw, vh, maxEdge);
+    const c = els.work;
+    if (c.width !== out || c.height !== out) { c.width = out; c.height = out; }
+    const ctx = c.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.translate(out / 2, out / 2);
+    ctx.rotate(angle * Math.PI / 180);
+    ctx.drawImage(video, (vw - side) / 2, (vh - side) / 2, side, side, -out / 2, -out / 2, out, out);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     return c;
+  }
+  // 一覧・サムネイル用の小さい画像
+  async function makeThumb(src) {
+    const T = 320;
+    const s = Math.min(1, T / Math.max(src.width, src.height));
+    thumbCanvas.width = Math.max(1, Math.round(src.width * s));
+    thumbCanvas.height = Math.max(1, Math.round(src.height * s));
+    const ctx = thumbCanvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'medium';
+    ctx.drawImage(src, 0, 0, thumbCanvas.width, thumbCanvas.height);
+    return canvasToBlob(thumbCanvas, 0.8);
+  }
+  // 保存ずみの写真は新しい20枚だけ手元に残す
+  function pruneSaved() {
+    const saved = shots.filter((s) => s.saved);
+    for (const s of saved.slice(0, Math.max(0, saved.length - 20))) {
+      URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl);
+      shots.splice(shots.indexOf(s), 1);
+    }
   }
   let shooting = false;
   els.shutter.addEventListener('click', async () => {
@@ -641,10 +653,10 @@
     els.flash.classList.remove('on'); void els.flash.offsetWidth; els.flash.classList.add('on');
     try {
       const angle = settings.fix ? screenAngle() : 0;
-      let c = drawRotated(els.video, vw, vh, angle, settings.maxEdge);
-      if (settings.aspect === 'square') c = cropSquare(c);
+      const c = captureSquare(els.video, vw, vh, angle, settings.maxEdge);
       const blob = await canvasToBlob(c, settings.quality);
-      const shot = { id: String(Date.now()) + Math.random().toString(16).slice(2, 6), blob, url: URL.createObjectURL(blob), w: c.width, h: c.height, ts: Date.now(), saved: false };
+      let thumb = null; try { thumb = await makeThumb(c); } catch (e) {}
+      const shot = { id: String(Date.now()) + Math.random().toString(16).slice(2, 6), blob, url: URL.createObjectURL(blob), thumb, thumbUrl: thumb ? URL.createObjectURL(thumb) : '', w: c.width, h: c.height, ts: Date.now(), saved: false };
       shots.push(shot);
       dbPut(shot);
       renderThumb();
@@ -659,7 +671,7 @@
   function renderThumb() {
     const last = shots[shots.length - 1];
     const unsaved = shots.filter((s) => !s.saved).length;
-    if (last) { els.thumbImg.src = last.url; els.thumbImg.hidden = false; } else { els.thumbImg.hidden = true; }
+    if (last) { els.thumbImg.src = last.thumbUrl || last.url; els.thumbImg.hidden = false; } else { els.thumbImg.hidden = true; }
     els.thumbCount.textContent = String(unsaved);
     els.thumbCount.hidden = unsaved === 0;
   }
@@ -673,6 +685,7 @@
       try {
         await navigator.share({ files });
         for (const s of list) { s.saved = true; dbDelete(s.id); }
+        pruneSaved();
         return true;
       } catch (e) {
         if (e && e.name === 'AbortError') return false; // 共有メニューを閉じただけ
@@ -686,6 +699,7 @@
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     }
     for (const s of list) { s.saved = true; dbDelete(s.id); }
+    pruneSaved();
     return true;
   }
 
@@ -700,7 +714,7 @@
     els.galleryHint.hidden = shots.length === 0;
     for (const s of [...shots].reverse()) {
       const b = document.createElement('button'); b.type = 'button'; b.dataset.id = s.id;
-      const img = document.createElement('img'); img.src = s.url; img.alt = '';
+      const img = document.createElement('img'); img.src = s.thumbUrl || s.url; img.alt = ''; img.decoding = 'async'; img.loading = 'lazy';
       const tag = document.createElement('span'); tag.className = 'tag' + (s.saved ? ' ok' : '');
       tag.textContent = s.saved ? '保存ずみ' : '未保存';
       b.append(img, tag); els.grid.appendChild(b);
@@ -739,7 +753,7 @@
     if (!s.saved && els.deleteBtn.dataset.confirm !== s.id) {
       els.deleteBtn.dataset.confirm = s.id; els.deleteBtn.textContent = '未保存です。本当に削除'; return;
     }
-    URL.revokeObjectURL(s.url); shots.splice(i, 1); dbDelete(s.id);
+    URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl); shots.splice(i, 1); dbDelete(s.id);
     els.deleteBtn.textContent = '削除'; delete els.deleteBtn.dataset.confirm;
     renderGallery(); renderThumb(); show(els.gallery);
   });
@@ -750,8 +764,10 @@
     await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = s.url; });
     const c = drawRotated(img, img.naturalWidth, img.naturalHeight, (deg + 360) % 360);
     const blob = await canvasToBlob(c, Math.max(settings.quality, 0.92));
-    URL.revokeObjectURL(s.url);
-    s.blob = blob; s.url = URL.createObjectURL(blob); s.w = c.width; s.h = c.height; s.saved = false;
+    let thumb = null; try { thumb = await makeThumb(c); } catch (e) {}
+    URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl);
+    s.blob = blob; s.url = URL.createObjectURL(blob); s.thumb = thumb; s.thumbUrl = thumb ? URL.createObjectURL(thumb) : '';
+    s.w = c.width; s.h = c.height; s.saved = false;
     dbPut(s); openViewer(s.id); renderThumb();
   }
   els.rotLeft.addEventListener('click', () => rotateCurrent(-90).catch(() => {}));
@@ -780,7 +796,8 @@
     for (const r of saved) {
       if (!(r.blob instanceof Blob)) continue;
       if (r.saved) { dbDelete(r.id); continue; }
-      shots.push({ id: r.id, blob: r.blob, url: URL.createObjectURL(r.blob), w: r.w, h: r.h, ts: r.ts, saved: !!r.saved });
+      const th = r.thumb instanceof Blob ? r.thumb : null;
+      shots.push({ id: r.id, blob: r.blob, url: URL.createObjectURL(r.blob), thumb: th, thumbUrl: th ? URL.createObjectURL(th) : '', w: r.w, h: r.h, ts: r.ts, saved: !!r.saved });
     }
     renderThumb();
     const unsaved = shots.filter((s) => !s.saved).length;
