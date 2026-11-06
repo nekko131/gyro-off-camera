@@ -38,6 +38,7 @@
   button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   [hidden] { display: none !important; }
+  body:not(.bg-on) .bgtools { display: none !important; }
 
   /* ---- 開始画面 ---- */
   #start {
@@ -228,7 +229,7 @@
   </header>
   <div class="body">
     <p class="hint" id="galleryHint">「◯枚を保存」→ 共有メニューの「画像を保存」で、写真アプリに入ります。</p>
-    <div class="actions" style="padding-block: 0 12px">
+    <div class="actions bgtools" style="padding-block: 0 12px">
       <button class="textbtn" id="bgAllBtn" type="button">まとめて背景を消す</button>
       <button class="textbtn" id="flattenBtn" type="button">透明の写真を白背景にする</button>
       <input id="flattenInput" type="file" accept="image/png,image/*" multiple hidden>
@@ -252,7 +253,7 @@
   <div class="actions">
     <button class="textbtn" id="rotLeft" type="button">↺ 左に回す</button>
     <button class="textbtn" id="rotRight" type="button">↻ 右に回す</button>
-    <button class="textbtn" id="bgBtn" type="button">背景を消す</button>
+    <button class="textbtn bgtools" id="bgBtn" type="button">背景を消す</button>
     <button class="textbtn primary" id="saveOneBtn" type="button">この1枚を保存</button>
   </div>
 </section>
@@ -286,10 +287,14 @@
       <div class="desc" id="sizeInfo" style="flex:1 1 100%"></div>
     </div>
     <div class="row">
+      <div><div class="label">背景除去の機能を使う</div><div class="desc">ふだんはオフで、撮る・保存するだけの画面になります。オンにすると一覧と1枚表示に「背景を消す」ボタンが出ます（精度は中くらい・AIの部品を初回にダウンロード）。</div></div>
+      <button class="switch" id="bgOnSwitch" role="switch" aria-checked="false" aria-label="背景除去の機能を使う"></button>
+    </div>
+    <div class="row bgtools">
       <div><div class="label">背景を消したら元の写真を消す</div><div class="desc">背景なしの写真だけが残ります。写真アプリに保存ずみの元写真は消えません。</div></div>
       <button class="switch" id="bgDelSwitch" role="switch" aria-checked="true" aria-label="背景を消したら元の写真を消す"></button>
     </div>
-    <div class="row" style="flex-wrap: wrap">
+    <div class="row bgtools" style="flex-wrap: wrap">
       <div style="flex: 1 1 100%"><div class="label">背景を消したあとの背景</div><div class="desc">「白」は出品写真向け（JPEG）。「透明」は合成用（PNG）。</div></div>
       <div class="seg" id="bgSeg">
         <button type="button" data-bg="white" aria-pressed="true">白</button>
@@ -328,7 +333,7 @@
         <li>白い枠の中が正方形の写真になります。まん中の白いボタンで撮影。何枚でも続けて撮れます。</li>
         <li>左下のサムネイルから一覧を開き、「まとめて保存」。</li>
         <li>出てきた共有メニューで「画像を保存」を選ぶと、写真アプリに全部入ります。</li>
-        <li>背景を消したいときは、一覧の「まとめて背景を消す」。1枚だけなら写真を開いて「背景を消す」。元の写真は自動で消え、背景なしの写真に置き換わります（設定で残すこともできます）。処理中は画面を消さないでください。</li>
+        <li>背景除去は、設定「背景除去の機能を使う」をオンにしたときだけ出ます。ふだんは使わなくて大丈夫です。</li>
       </ol>
       <h3>もっときれいに背景を消すには（Apple純正・おすすめ）</h3>
       <ul>
@@ -385,12 +390,12 @@
     qualitySeg: $('qualitySeg'), resInfo: $('resInfo'), work: $('work'), soundSwitch: $('soundSwitch'),
     bgBtn: $('bgBtn'), bgProgress: $('bgProgress'), bgSeg: $('bgSeg'), bgPreloadBtn: $('bgPreloadBtn'), bgPreloadInfo: $('bgPreloadInfo'),
     bgModelSeg: $('bgModelSeg'), bgAllBtn: $('bgAllBtn'), bgAllInfo: $('bgAllInfo'), bgDelSwitch: $('bgDelSwitch'),
-    flattenBtn: $('flattenBtn'), flattenInput: $('flattenInput'),
+    flattenBtn: $('flattenBtn'), flattenInput: $('flattenInput'), bgOnSwitch: $('bgOnSwitch'),
     sizeSeg: $('sizeSeg'), sizeInput: $('sizeInput'), sizeInfo: $('sizeInfo'),
   };
 
   // ---- 設定（端末ローカル） ----
-  const settings = { fix: true, quality: 0.95, maxEdge: 1440, aspect: 'square', sound: true, bg: 'white', bgModel: 'isnet_fp16', bgDelete: true, v: 2 };
+  const settings = { fix: true, quality: 0.95, maxEdge: 1440, aspect: 'square', sound: true, bg: 'white', bgModel: 'isnet_fp16', bgDelete: true, bgOn: false, v: 2 };
   try {
     const s = JSON.parse(localStorage.getItem('gyrooff.settings') || '{}');
     if (typeof s.fix === 'boolean') settings.fix = s.fix;
@@ -401,12 +406,15 @@
     if (s.bg === 'white' || s.bg === 'transparent') settings.bg = s.bg;
     if (s.bgModel === 'isnet_fp16' || s.bgModel === 'isnet_quint8') settings.bgModel = s.bgModel;
     if (typeof s.bgDelete === 'boolean') settings.bgDelete = s.bgDelete;
+    if (typeof s.bgOn === 'boolean') settings.bgOn = s.bgOn;
   } catch (e) {}
   function saveSettings() { try { localStorage.setItem('gyrooff.settings', JSON.stringify(settings)); } catch (e) {} }
   function renderSettings() {
     els.fixSwitch.setAttribute('aria-checked', String(settings.fix));
     els.soundSwitch.setAttribute('aria-checked', String(settings.sound));
     els.bgDelSwitch.setAttribute('aria-checked', String(settings.bgDelete));
+    els.bgOnSwitch.setAttribute('aria-checked', String(settings.bgOn));
+    document.body.classList.toggle('bg-on', settings.bgOn);
     for (const b of els.bgSeg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.bg === settings.bg));
     for (const b of els.bgModelSeg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.m === settings.bgModel));
     for (const b of els.qualitySeg.querySelectorAll('button')) {
@@ -989,6 +997,7 @@
     const b = e.target.closest('button'); if (!b) return;
     settings.bg = b.dataset.bg; saveSettings(); renderSettings();
   });
+  els.bgOnSwitch.addEventListener('click', () => { settings.bgOn = !settings.bgOn; saveSettings(); renderSettings(); });
   els.bgDelSwitch.addEventListener('click', () => { settings.bgDelete = !settings.bgDelete; saveSettings(); renderSettings(); });
   els.bgModelSeg.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
