@@ -230,6 +230,8 @@
     <p class="hint" id="galleryHint">「◯枚を保存」→ 共有メニューの「画像を保存」で、写真アプリに入ります。</p>
     <div class="actions" style="padding-block: 0 12px">
       <button class="textbtn" id="bgAllBtn" type="button">まとめて背景を消す</button>
+      <button class="textbtn" id="flattenBtn" type="button">透明の写真を白背景にする</button>
+      <input id="flattenInput" type="file" accept="image/png,image/*" multiple hidden>
     </div>
     <p class="hint" id="bgAllInfo" hidden></p>
     <div class="grid" id="grid"></div>
@@ -328,6 +330,13 @@
         <li>出てきた共有メニューで「画像を保存」を選ぶと、写真アプリに全部入ります。</li>
         <li>背景を消したいときは、一覧の「まとめて背景を消す」。1枚だけなら写真を開いて「背景を消す」。元の写真は自動で消え、背景なしの写真に置き換わります（設定で残すこともできます）。処理中は画面を消さないでください。</li>
       </ol>
+      <h3>もっときれいに背景を消すには（Apple純正・おすすめ）</h3>
+      <ul>
+        <li>iPhoneに入っている背景削除は、このアプリのAIより精度が高く、速いです。「ショートカット」アプリに次の1本を入れると、写真アプリから複数枚まとめて使えます。</li>
+        <li><a href="背景を削除.shortcut" style="color: var(--accent)">ショートカット「背景を削除」を入れる</a>（Safariで開き、「ショートカットを追加」を押す）</li>
+        <li>使い方：写真アプリで写真を複数選ぶ → 共有ボタン → 「背景を削除」。背景が透明になった写真が写真アプリに保存されます。</li>
+        <li>白背景にしたいときは、このアプリの一覧で「透明の写真を白背景にする」→ その写真を選ぶ → 保存。</li>
+      </ul>
       <h3>注意</h3>
       <ul>
         <li>撮った写真はこの端末のブラウザ内に一時保存されます。保存が終わるまでSafariの履歴やサイトデータを消さないでください。</li>
@@ -376,6 +385,7 @@
     qualitySeg: $('qualitySeg'), resInfo: $('resInfo'), work: $('work'), soundSwitch: $('soundSwitch'),
     bgBtn: $('bgBtn'), bgProgress: $('bgProgress'), bgSeg: $('bgSeg'), bgPreloadBtn: $('bgPreloadBtn'), bgPreloadInfo: $('bgPreloadInfo'),
     bgModelSeg: $('bgModelSeg'), bgAllBtn: $('bgAllBtn'), bgAllInfo: $('bgAllInfo'), bgDelSwitch: $('bgDelSwitch'),
+    flattenBtn: $('flattenBtn'), flattenInput: $('flattenInput'),
     sizeSeg: $('sizeSeg'), sizeInput: $('sizeInput'), sizeInfo: $('sizeInfo'),
   };
 
@@ -1021,6 +1031,31 @@
       els.bgAllInfo.textContent = `${done}枚の背景を消しました${failed ? `（${failed}枚は失敗）` : ''}${bgDevice === 'gpu' ? '・GPU' : '・CPU'}・${((performance.now() - t0) / 1000).toFixed(0)}秒。${settings.bgDelete ? '元の写真はアプリから消しました。' : '元の写真も残っています。'}`;
       renderGallery();
     }
+  });
+
+  // ---- 透明PNG（Apple純正の背景削除などで作った写真）を白背景のJPEGにする ----
+  els.flattenBtn.addEventListener('click', () => { els.flattenInput.value = ''; els.flattenInput.click(); });
+  els.flattenInput.addEventListener('change', async () => {
+    const files = [...(els.flattenInput.files || [])]; if (!files.length) return;
+    els.bgAllInfo.hidden = false; els.flattenBtn.disabled = true;
+    let done = 0, failed = 0;
+    for (const f of files) {
+      els.bgAllInfo.textContent = `白背景にしています ${done + failed + 1} / ${files.length}`;
+      try {
+        const bm = await createImageBitmap(f);
+        const c = els.work; c.width = bm.width; c.height = bm.height;
+        const ctx = c.getContext('2d'); ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(bm, 0, 0);
+        const blob = await canvasToBlob(c, Math.max(settings.quality, 0.92));
+        let thumb = null; try { thumb = await makeThumb(c); } catch (e) {}
+        const bw = bm.width, bh = bm.height; bm.close && bm.close();
+        const shot = { id: String(Date.now()) + Math.random().toString(16).slice(2, 6), blob, type: 'image/jpeg', nobg: true, url: URL.createObjectURL(blob), thumb, thumbUrl: thumb ? URL.createObjectURL(thumb) : '', w: bw, h: bh, ts: Date.now(), saved: false };
+        shots.push(shot); dbPut(shot); done++;
+      } catch (e) { failed++; }
+    }
+    renderThumb(); renderGallery(); els.flattenBtn.disabled = false;
+    els.bgAllInfo.textContent = `${done}枚を白背景にしました${failed ? `（${failed}枚は読めませんでした）` : ''}。「◯枚を保存」で写真アプリに入ります。`;
   });
 
   els.rotLeft.addEventListener('click', () => rotateCurrent(-90).catch(() => {}));

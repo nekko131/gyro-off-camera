@@ -16,3 +16,12 @@ iPhoneのSafariで開いて使う、傾きセンサー（ジャイロ）を見�
 
 - `index.html` … アプリ本体（1ファイル）
 - `manifest.webmanifest` / `icon-*.png` … ホーム画面追加用
+
+## 背景除去
+
+- アプリ内：一覧の「まとめて背景を消す」。iPhoneの中でAI（ISNet）が動く。精度は中くらい
+- おすすめ：Apple純正の背景削除を複数枚まとめて使うショートカット
+  - 入れる: https://nekko131.github.io/gyro-off-camera/背景を削除.shortcut
+  - 使う: 写真アプリで複数選択 → 共有 → 「背景を削除」 → 透明PNGが写真アプリに保存される
+  - 白背景にしたいときは、アプリの一覧「透明の写真を白背景にする」
+- ショートカットの中身: `is.workflow.actions.image.removebackground` → `is.workflow.actions.savetocameraroll`（Macの `shortcuts sign --mode anyone` で署名ずみ）
