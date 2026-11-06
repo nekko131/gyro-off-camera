@@ -283,6 +283,10 @@
       </label>
       <div class="desc" id="sizeInfo" style="flex:1 1 100%"></div>
     </div>
+    <div class="row">
+      <div><div class="label">背景を消したら元の写真を消す</div><div class="desc">背景なしの写真だけが残ります。写真アプリに保存ずみの元写真は消えません。</div></div>
+      <button class="switch" id="bgDelSwitch" role="switch" aria-checked="true" aria-label="背景を消したら元の写真を消す"></button>
+    </div>
     <div class="row" style="flex-wrap: wrap">
       <div style="flex: 1 1 100%"><div class="label">背景を消したあとの背景</div><div class="desc">「白」は出品写真向け（JPEG）。「透明」は合成用（PNG）。</div></div>
       <div class="seg" id="bgSeg">
@@ -322,7 +326,7 @@
         <li>白い枠の中が正方形の写真になります。まん中の白いボタンで撮影。何枚でも続けて撮れます。</li>
         <li>左下のサムネイルから一覧を開き、「まとめて保存」。</li>
         <li>出てきた共有メニューで「画像を保存」を選ぶと、写真アプリに全部入ります。</li>
-        <li>背景を消したいときは、一覧の「まとめて背景を消す」。1枚だけなら写真を開いて「背景を消す」。元の写真は残り、背景を消した写真が増えます。処理中は画面を消さないでください。</li>
+        <li>背景を消したいときは、一覧の「まとめて背景を消す」。1枚だけなら写真を開いて「背景を消す」。元の写真は自動で消え、背景なしの写真に置き換わります（設定で残すこともできます）。処理中は画面を消さないでください。</li>
       </ol>
       <h3>注意</h3>
       <ul>
@@ -371,12 +375,12 @@
     settings: $('settings'), settingsBack: $('settingsBack'), fixSwitch: $('fixSwitch'),
     qualitySeg: $('qualitySeg'), resInfo: $('resInfo'), work: $('work'), soundSwitch: $('soundSwitch'),
     bgBtn: $('bgBtn'), bgProgress: $('bgProgress'), bgSeg: $('bgSeg'), bgPreloadBtn: $('bgPreloadBtn'), bgPreloadInfo: $('bgPreloadInfo'),
-    bgModelSeg: $('bgModelSeg'), bgAllBtn: $('bgAllBtn'), bgAllInfo: $('bgAllInfo'),
+    bgModelSeg: $('bgModelSeg'), bgAllBtn: $('bgAllBtn'), bgAllInfo: $('bgAllInfo'), bgDelSwitch: $('bgDelSwitch'),
     sizeSeg: $('sizeSeg'), sizeInput: $('sizeInput'), sizeInfo: $('sizeInfo'),
   };
 
   // ---- 設定（端末ローカル） ----
-  const settings = { fix: true, quality: 0.95, maxEdge: 1440, aspect: 'square', sound: true, bg: 'white', bgModel: 'isnet_fp16', v: 2 };
+  const settings = { fix: true, quality: 0.95, maxEdge: 1440, aspect: 'square', sound: true, bg: 'white', bgModel: 'isnet_fp16', bgDelete: true, v: 2 };
   try {
     const s = JSON.parse(localStorage.getItem('gyrooff.settings') || '{}');
     if (typeof s.fix === 'boolean') settings.fix = s.fix;
@@ -386,11 +390,13 @@
     if (typeof s.sound === 'boolean') settings.sound = s.sound;
     if (s.bg === 'white' || s.bg === 'transparent') settings.bg = s.bg;
     if (s.bgModel === 'isnet_fp16' || s.bgModel === 'isnet_quint8') settings.bgModel = s.bgModel;
+    if (typeof s.bgDelete === 'boolean') settings.bgDelete = s.bgDelete;
   } catch (e) {}
   function saveSettings() { try { localStorage.setItem('gyrooff.settings', JSON.stringify(settings)); } catch (e) {} }
   function renderSettings() {
     els.fixSwitch.setAttribute('aria-checked', String(settings.fix));
     els.soundSwitch.setAttribute('aria-checked', String(settings.sound));
+    els.bgDelSwitch.setAttribute('aria-checked', String(settings.bgDelete));
     for (const b of els.bgSeg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.bg === settings.bg));
     for (const b of els.bgModelSeg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.m === settings.bgModel));
     for (const b of els.qualitySeg.querySelectorAll('button')) {
@@ -935,9 +941,15 @@
     const bw = bm.width, bh = bm.height;
     bm.close && bm.close();
     const shot = { id: String(Date.now()) + Math.random().toString(16).slice(2, 6), blob, type, nobg: true, url: URL.createObjectURL(blob), thumb, thumbUrl: thumb ? URL.createObjectURL(thumb) : '', w: bw, h: bh, ts: Date.now(), saved: false };
-    shots.push(shot); dbPut(shot); renderThumb();
-    s.bgDone = true; dbPut(s);
+    shots.push(shot); dbPut(shot);
+    if (settings.bgDelete) removeShot(s); else { s.bgDone = true; dbPut(s); }
+    renderThumb();
     return shot;
+  }
+  function removeShot(s) {
+    const i = shots.indexOf(s); if (i < 0) return;
+    if (s.url) URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl);
+    shots.splice(i, 1); dbDelete(s.id);
   }
   els.bgBtn.addEventListener('click', async () => {
     const s = shots.find((x) => x.id === currentId); if (!s || bgBusy || s.nobg) return;
@@ -947,18 +959,19 @@
       const shot = await removeBackgroundOf(s);
       els.bgProgress.hidden = true;
       openViewer(shot.id);
-      status(`背景を消しました（${bgDevice === 'gpu' ? 'GPU' : 'CPU'}・${(bgLastMs / 1000).toFixed(1)}秒）。元の写真も残っています`, 3000);
+      status(`背景を消しました（${bgDevice === 'gpu' ? 'GPU' : 'CPU'}・${(bgLastMs / 1000).toFixed(1)}秒）${settings.bgDelete ? '。元の写真はアプリから消しました' : '。元の写真も残っています'}`, 3000);
     } catch (e) {
       els.bgProgress.textContent = `背景を消せませんでした（${e && e.message ? e.message : e}）。通信を確認して、もう一度押してください。`;
       els.bgBtn.textContent = '背景を消す';
     } finally {
-      bgBusy = false; if (!s.nobg) els.bgBtn.disabled = false;
+      bgBusy = false; if (!s.nobg && shots.includes(s)) els.bgBtn.disabled = false;
     }
   });
   els.bgSeg.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     settings.bg = b.dataset.bg; saveSettings(); renderSettings();
   });
+  els.bgDelSwitch.addEventListener('click', () => { settings.bgDelete = !settings.bgDelete; saveSettings(); renderSettings(); });
   els.bgModelSeg.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     settings.bgModel = b.dataset.m; saveSettings(); renderSettings();
@@ -1005,7 +1018,7 @@
       }
     } finally {
       bgAllRunning = false; bgBusy = false; bgAllCancel = false;
-      els.bgAllInfo.textContent = `${done}枚の背景を消しました${failed ? `（${failed}枚は失敗）` : ''}${bgDevice === 'gpu' ? '・GPU' : '・CPU'}・${((performance.now() - t0) / 1000).toFixed(0)}秒。画面を下に送ると、背景なしの写真が並んでいます。`;
+      els.bgAllInfo.textContent = `${done}枚の背景を消しました${failed ? `（${failed}枚は失敗）` : ''}${bgDevice === 'gpu' ? '・GPU' : '・CPU'}・${((performance.now() - t0) / 1000).toFixed(0)}秒。${settings.bgDelete ? '元の写真はアプリから消しました。' : '元の写真も残っています。'}`;
       renderGallery();
     }
   });
