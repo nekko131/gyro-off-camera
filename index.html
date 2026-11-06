@@ -150,6 +150,7 @@
   /* 1枚表示 */
   #viewer { position: fixed; inset: 0; background: #000; display: flex; flex-direction: column; }
   #viewer .stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
+  #viewer img.transparent { background: repeating-conic-gradient(#3a3d44 0 25%, #24262b 0 50%) 0 0 / 24px 24px; }
   #viewer img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; -webkit-user-select: auto; user-select: auto; -webkit-touch-callout: default; }
   #viewer .meta { text-align: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   #viewer .actions {
@@ -237,10 +238,12 @@
     <button class="textbtn danger" id="deleteBtn" type="button">削除</button>
   </header>
   <div class="stage"><img id="viewerImg" alt="撮影した写真"></div>
+  <p class="hint" id="bgProgress" hidden></p>
   <p class="hint">保存がうまくいかないときは、写真を長押し →「"写真"に追加」でも保存できます。</p>
   <div class="actions">
     <button class="textbtn" id="rotLeft" type="button">↺ 左に回す</button>
     <button class="textbtn" id="rotRight" type="button">↻ 右に回す</button>
+    <button class="textbtn" id="bgBtn" type="button">背景を消す</button>
     <button class="textbtn primary" id="saveOneBtn" type="button">この1枚を保存</button>
   </div>
 </section>
@@ -273,6 +276,16 @@
       </label>
       <div class="desc" id="sizeInfo" style="flex:1 1 100%"></div>
     </div>
+    <div class="row" style="flex-wrap: wrap">
+      <div style="flex: 1 1 100%"><div class="label">背景を消したあとの背景</div><div class="desc">「白」は出品写真向け（JPEG）。「透明」は合成用（PNG）。</div></div>
+      <div class="seg" id="bgSeg">
+        <button type="button" data-bg="white" aria-pressed="true">白</button>
+        <button type="button" data-bg="transparent" aria-pressed="false">透明</button>
+      </div>
+      <div class="desc" style="flex:1 1 100%">背景除去はこのiPhoneの中で動きます。はじめて使うときだけAIの部品（約44MB）をダウンロードします。1枚あたり10〜40秒ほどかかります。</div>
+      <button class="textbtn" id="bgPreloadBtn" type="button" style="flex:none">AIの部品を先にダウンロード</button>
+      <div class="desc" id="bgPreloadInfo" style="flex:1 1 100%"></div>
+    </div>
     <div class="row">
       <div><div class="label">画質</div><div class="desc">「高」は商品写真向け。ファイルは大きくなります。</div></div>
       <div class="seg" id="qualitySeg">
@@ -297,6 +310,7 @@
         <li>白い枠の中が正方形の写真になります。まん中の白いボタンで撮影。何枚でも続けて撮れます。</li>
         <li>左下のサムネイルから一覧を開き、「まとめて保存」。</li>
         <li>出てきた共有メニューで「画像を保存」を選ぶと、写真アプリに全部入ります。</li>
+        <li>背景を消したいときは、一覧から写真を開いて「背景を消す」。元の写真は残り、背景を消した写真が1枚増えます。</li>
       </ol>
       <h3>注意</h3>
       <ul>
@@ -344,11 +358,12 @@
     deleteBtn: $('deleteBtn'), rotLeft: $('rotLeft'), rotRight: $('rotRight'), saveOneBtn: $('saveOneBtn'),
     settings: $('settings'), settingsBack: $('settingsBack'), fixSwitch: $('fixSwitch'),
     qualitySeg: $('qualitySeg'), resInfo: $('resInfo'), work: $('work'), soundSwitch: $('soundSwitch'),
+    bgBtn: $('bgBtn'), bgProgress: $('bgProgress'), bgSeg: $('bgSeg'), bgPreloadBtn: $('bgPreloadBtn'), bgPreloadInfo: $('bgPreloadInfo'),
     sizeSeg: $('sizeSeg'), sizeInput: $('sizeInput'), sizeInfo: $('sizeInfo'),
   };
 
   // ---- 設定（端末ローカル） ----
-  const settings = { fix: true, quality: 0.95, maxEdge: 1440, aspect: 'square', sound: true, v: 2 };
+  const settings = { fix: true, quality: 0.95, maxEdge: 1440, aspect: 'square', sound: true, bg: 'white', v: 2 };
   try {
     const s = JSON.parse(localStorage.getItem('gyrooff.settings') || '{}');
     if (typeof s.fix === 'boolean') settings.fix = s.fix;
@@ -356,11 +371,13 @@
     if (typeof s.maxEdge === 'number' && s.maxEdge > 0) settings.maxEdge = s.maxEdge;
     // 旧版の初期値「最大(0)」は重いので標準(1440)へ。旧版で選んだ大きい数字もそのまま残す
     if (typeof s.sound === 'boolean') settings.sound = s.sound;
+    if (s.bg === 'white' || s.bg === 'transparent') settings.bg = s.bg;
   } catch (e) {}
   function saveSettings() { try { localStorage.setItem('gyrooff.settings', JSON.stringify(settings)); } catch (e) {} }
   function renderSettings() {
     els.fixSwitch.setAttribute('aria-checked', String(settings.fix));
     els.soundSwitch.setAttribute('aria-checked', String(settings.sound));
+    for (const b of els.bgSeg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.bg === settings.bg));
     for (const b of els.qualitySeg.querySelectorAll('button')) {
       b.setAttribute('aria-pressed', String(Number(b.dataset.q) === settings.quality));
     }
@@ -482,7 +499,7 @@
     const db = await openDB(); if (!db) return;
     try {
       const tx = db.transaction(['shots', 'full'], 'readwrite');
-      tx.objectStore('shots').put({ id: shot.id, thumb: shot.thumb || null, w: shot.w, h: shot.h, ts: shot.ts, saved: shot.saved });
+      tx.objectStore('shots').put({ id: shot.id, thumb: shot.thumb || null, w: shot.w, h: shot.h, ts: shot.ts, saved: shot.saved, type: shot.type || 'image/jpeg', nobg: !!shot.nobg });
       if (shot.blob) tx.objectStore('full').put({ id: shot.id, blob: shot.blob });
     } catch (e) {}
   }
@@ -653,13 +670,14 @@
 
   // ---- 撮影 ----
   function pad(n) { return String(n).padStart(2, '0'); }
-  function fileName(ts) {
+  function fileName(ts, s) {
     const d = new Date(ts);
-    return `photo_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jpg`;
+    const png = s && s.type === 'image/png';
+    return `photo_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${s && s.nobg ? '_nobg' : ''}${png ? '.png' : '.jpg'}`;
   }
-  function canvasToBlob(canvas, quality) {
+  function canvasToBlob(canvas, quality, type = 'image/jpeg') {
     return new Promise((resolve, reject) => {
-      canvas.toBlob((b) => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/jpeg', quality);
+      canvas.toBlob((b) => b ? resolve(b) : reject(new Error('toBlob failed')), type, quality);
     });
   }
   // 映像フレームを、画面の回転ぶんだけ戻してセンサーそのままの向きで描く
@@ -700,6 +718,7 @@
     thumbCanvas.width = Math.max(1, Math.round(src.width * s));
     thumbCanvas.height = Math.max(1, Math.round(src.height * s));
     const ctx = thumbCanvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, thumbCanvas.width, thumbCanvas.height);
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'medium';
     ctx.drawImage(src, 0, 0, thumbCanvas.width, thumbCanvas.height);
     return canvasToBlob(thumbCanvas, 0.8);
@@ -725,7 +744,7 @@
       const c = captureSquare(els.video, vw, vh, angle, settings.maxEdge);
       const blob = await canvasToBlob(c, settings.quality);
       let thumb = null; try { thumb = await makeThumb(c); } catch (e) {}
-      const shot = { id: String(Date.now()) + Math.random().toString(16).slice(2, 6), blob, url: URL.createObjectURL(blob), thumb, thumbUrl: thumb ? URL.createObjectURL(thumb) : '', w: c.width, h: c.height, ts: Date.now(), saved: false };
+      const shot = { id: String(Date.now()) + Math.random().toString(16).slice(2, 6), blob, type: 'image/jpeg', nobg: false, url: URL.createObjectURL(blob), thumb, thumbUrl: thumb ? URL.createObjectURL(thumb) : '', w: c.width, h: c.height, ts: Date.now(), saved: false };
       shots.push(shot);
       dbPut(shot);
       renderThumb();
@@ -746,7 +765,7 @@
   }
 
   // ---- 保存（共有シート経由で写真アプリへ） ----
-  function toFiles(list) { return list.filter((s) => s.blob).map((s) => new File([s.blob], fileName(s.ts), { type: 'image/jpeg', lastModified: s.ts })); }
+  function toFiles(list) { return list.filter((s) => s.blob).map((s) => new File([s.blob], fileName(s.ts, s), { type: s.type || 'image/jpeg', lastModified: s.ts })); }
   async function saveShots(list) {
     if (!list.length) return false;
     await Promise.all(list.map(ensureBlob));
@@ -809,7 +828,10 @@
     const s = shots.find((x) => x.id === id); if (!s) return;
     currentId = id;
     els.viewerImg.src = s.url || s.thumbUrl || '';
+    els.viewerImg.classList.toggle('transparent', s.type === 'image/png');
     if (!s.url) ensureBlob(s).then(() => { if (currentId === id && s.url) els.viewerImg.src = s.url; });
+    els.bgBtn.disabled = bgBusy; els.bgBtn.textContent = s.nobg ? '背景は消してあります' : '背景を消す';
+    if (s.nobg) els.bgBtn.disabled = true;
     const d = new Date(s.ts);
     els.viewerMeta.textContent = `${s.w} × ${s.h} ・ ${pad(d.getHours())}:${pad(d.getMinutes())}${s.saved ? ' ・ 保存ずみ' : ''}`;
     show(els.viewer);
@@ -837,13 +859,87 @@
     const img = new Image();
     await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = s.url; });
     const c = drawRotated(img, img.naturalWidth, img.naturalHeight, (deg + 360) % 360);
-    const blob = await canvasToBlob(c, Math.max(settings.quality, 0.92));
+    const blob = await canvasToBlob(c, Math.max(settings.quality, 0.92), s.type === 'image/png' ? 'image/png' : 'image/jpeg');
     let thumb = null; try { thumb = await makeThumb(c); } catch (e) {}
     if (s.url) URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl);
     s.blob = blob; s.url = URL.createObjectURL(blob); s.thumb = thumb; s.thumbUrl = thumb ? URL.createObjectURL(thumb) : '';
     s.w = c.width; s.h = c.height; s.saved = false;
     dbPut(s); openViewer(s.id); renderThumb();
   }
+  // ---- 背景除去（@imgly/background-removal・ISNet。iPhoneの中で動く） ----
+  const BG_LIB = 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.7.0/+esm';
+  let bgLibP = null, bgBusy = false;
+  function loadBgLib() {
+    if (!bgLibP) bgLibP = import(BG_LIB).catch((e) => { bgLibP = null; throw e; });
+    return bgLibP;
+  }
+  function bgProgressText(key, cur, tot) {
+    if (key && key.startsWith('fetch')) {
+      const pct = tot ? Math.round(cur / tot * 100) : 0;
+      return `AIの部品をダウンロード中 ${pct}%（初回だけ・約44MB）`;
+    }
+    return '背景を判定中…（10〜40秒）';
+  }
+  async function removeBackgroundOf(s) {
+    const mod = await loadBgLib();
+    const src = await ensureBlob(s);
+    if (!src) throw new Error('写真を読み込めませんでした');
+    els.bgProgress.textContent = '準備中…';
+    const png = await mod.removeBackground(src, {
+      model: 'isnet_quint8', device: 'cpu',
+      output: { format: 'image/png', quality: 1 },
+      progress: (key, cur, tot) => { els.bgProgress.textContent = bgProgressText(key, cur, tot); },
+    });
+    els.bgProgress.textContent = '仕上げ中…';
+    let blob = png, type = 'image/png';
+    const bm = await createImageBitmap(png);
+    if (settings.bg === 'white') {
+      const c = els.work; c.width = bm.width; c.height = bm.height;
+      const ctx = c.getContext('2d'); ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(bm, 0, 0);
+      blob = await canvasToBlob(c, Math.max(settings.quality, 0.92)); type = 'image/jpeg';
+    }
+    const tc = els.work; if (type === 'image/png') { tc.width = bm.width; tc.height = bm.height; const cx = tc.getContext('2d'); cx.setTransform(1, 0, 0, 1, 0, 0); cx.clearRect(0, 0, tc.width, tc.height); cx.drawImage(bm, 0, 0); }
+    let thumb = null; try { thumb = await makeThumb(tc); } catch (e) {}
+    const bw = bm.width, bh = bm.height;
+    bm.close && bm.close();
+    const shot = { id: String(Date.now()) + Math.random().toString(16).slice(2, 6), blob, type, nobg: true, url: URL.createObjectURL(blob), thumb, thumbUrl: thumb ? URL.createObjectURL(thumb) : '', w: bw, h: bh, ts: Date.now(), saved: false };
+    shots.push(shot); dbPut(shot); renderThumb();
+    return shot;
+  }
+  els.bgBtn.addEventListener('click', async () => {
+    const s = shots.find((x) => x.id === currentId); if (!s || bgBusy || s.nobg) return;
+    bgBusy = true; els.bgBtn.disabled = true; els.bgBtn.textContent = '処理中…';
+    els.bgProgress.hidden = false; els.bgProgress.textContent = '準備中…';
+    try {
+      const shot = await removeBackgroundOf(s);
+      els.bgProgress.hidden = true;
+      openViewer(shot.id);
+      status('背景を消しました。元の写真も残っています', 3000);
+    } catch (e) {
+      els.bgProgress.textContent = `背景を消せませんでした（${e && e.message ? e.message : e}）。通信を確認して、もう一度押してください。`;
+      els.bgBtn.textContent = '背景を消す';
+    } finally {
+      bgBusy = false; if (!s.nobg) els.bgBtn.disabled = false;
+    }
+  });
+  els.bgSeg.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    settings.bg = b.dataset.bg; saveSettings(); renderSettings();
+  });
+  els.bgPreloadBtn.addEventListener('click', async () => {
+    els.bgPreloadBtn.disabled = true; els.bgPreloadInfo.textContent = '読み込み中…';
+    try {
+      const mod = await loadBgLib();
+      await mod.preload({ model: 'isnet_quint8', device: 'cpu', progress: (key, cur, tot) => { els.bgPreloadInfo.textContent = bgProgressText(key, cur, tot); } });
+      els.bgPreloadInfo.textContent = '準備できました。次の背景除去はすぐ始まります。';
+    } catch (e) {
+      els.bgPreloadInfo.textContent = `ダウンロードできませんでした（${e && e.message ? e.message : e}）`;
+      els.bgPreloadBtn.disabled = false;
+    }
+  });
+
   els.rotLeft.addEventListener('click', () => rotateCurrent(-90).catch(() => {}));
   els.rotRight.addEventListener('click', () => rotateCurrent(90).catch(() => {}));
 
@@ -871,7 +967,7 @@
     for (const r of saved) {
       if (r.saved) { dbDelete(r.id); continue; }
       const th = r.thumb instanceof Blob ? r.thumb : null;
-      shots.push({ id: r.id, blob: null, url: '', thumb: th, thumbUrl: th ? URL.createObjectURL(th) : '', w: r.w, h: r.h, ts: r.ts, saved: false });
+      shots.push({ id: r.id, blob: null, type: r.type || 'image/jpeg', nobg: !!r.nobg, url: '', thumb: th, thumbUrl: th ? URL.createObjectURL(th) : '', w: r.w, h: r.h, ts: r.ts, saved: false });
     }
     T.dbCount = shots.length;
     renderDiag();
