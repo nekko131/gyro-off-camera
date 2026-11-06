@@ -333,7 +333,7 @@
       <h3>もっときれいに背景を消すには（Apple純正・おすすめ）</h3>
       <ul>
         <li>iPhoneに入っている背景削除は、このアプリのAIより精度が高く、速いです。「ショートカット」アプリに次の1本を入れると、写真アプリから複数枚まとめて使えます。</li>
-        <li><a href="背景を削除.shortcut" style="color: var(--accent)">ショートカット「背景を削除」を入れる</a>（Safariで開き、「ショートカットを追加」を押す）</li>
+        <li><a href="背景を削除.shortcut" target="_blank" rel="noopener" style="color: var(--accent)">ショートカット「背景を削除」を入れる</a>（Safariで開き、「ショートカットを追加」を押す）</li>
         <li>使い方：写真アプリで写真を複数選ぶ → 共有ボタン → 「背景を削除」。背景が透明になった写真が写真アプリに保存されます。</li>
         <li>白背景にしたいときは、このアプリの一覧で「透明の写真を白背景にする」→ その写真を選ぶ → 保存。</li>
       </ul>
@@ -646,7 +646,10 @@
     const w = st.width || els.video.videoWidth, h = st.height || els.video.videoHeight;
     const sec = ((performance.now() - t0) / 1000).toFixed(1);
     if (w && h) { camW = w; camH = h; els.resInfo.textContent = `${w} × ${h}（${(w * h / 1e6).toFixed(1)}メガピクセル）・カメラを開くのに ${sec} 秒`; renderSizeInfo(); }
-    if (track) track.addEventListener('ended', () => { status('カメラが止まりました。再接続します'); restartSoon(); });
+    if (track) {
+      track.addEventListener('ended', () => { status('カメラが止まりました。再接続します'); restartSoon(); });
+      track.addEventListener('mute', () => { setTimeout(() => { if (track.muted && !els.cam.hidden) { status('映像が止まったので開き直します'); restartSoon(); } }, 1500); });
+    }
   }
   function stopCamera() {
     if (stream) { for (const t of stream.getTracks()) t.stop(); }
@@ -663,7 +666,7 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       wakeLock = null; requestWakeLock();
-      if (!els.cam.hidden && (!stream || !stream.active)) restartSoon();
+      if (!els.cam.hidden) restartSoon();
     }
   });
 
@@ -764,7 +767,12 @@
   }
   let shooting = false;
   els.shutter.addEventListener('click', async () => {
-    if (shooting || !stream) return;
+    if (shooting) return;
+    if (!stream || !stream.active) { status('カメラを開き直しています…'); restartSoon(); return; }
+    const track = stream.getVideoTracks()[0];
+    if (!track || track.readyState !== 'live' || track.muted || els.video.paused || els.video.readyState < 2) {
+      status('映像が止まっていたので、カメラを開き直します'); restartSoon(); return;
+    }
     const vw = els.video.videoWidth, vh = els.video.videoHeight;
     if (!vw || !vh) { status('まだ映像が来ていません'); return; }
     shooting = true; els.shutter.disabled = true;
@@ -781,7 +789,7 @@
       renderThumb();
       status(`${c.width} × ${c.height} で撮影しました`);
     } catch (e) {
-      status('撮影に失敗しました。もう一度押してください');
+      status(`撮影に失敗しました（${e && e.name ? e.name : ''} ${e && e.message ? e.message : ''}）。もう一度押してください`, 5000);
     } finally {
       shooting = false; els.shutter.disabled = false;
     }
