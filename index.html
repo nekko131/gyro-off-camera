@@ -8,6 +8,9 @@
 <meta name="apple-mobile-web-app-title" content="固定カメラ">
 <meta name="theme-color" content="#0b0c0e">
 <link rel="manifest" href="manifest.webmanifest">
+<script type="importmap">
+{"imports":{"onnxruntime-web":"https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.mjs","onnxruntime-web/webgpu":"https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.webgpu.mjs"}}
+</script>
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>ジャイロOFFカメラ</title>
 <style>
@@ -224,7 +227,11 @@
     <button class="textbtn primary" id="saveAllBtn" type="button">まとめて保存</button>
   </header>
   <div class="body">
-    <p class="hint" id="galleryHint">「まとめて保存」→ 共有メニューの「画像を保存」で、写真アプリに入ります。</p>
+    <p class="hint" id="galleryHint">「◯枚を保存」→ 共有メニューの「画像を保存」で、写真アプリに入ります。</p>
+    <div class="actions" style="padding-block: 0 12px">
+      <button class="textbtn" id="bgAllBtn" type="button">まとめて背景を消す</button>
+    </div>
+    <p class="hint" id="bgAllInfo" hidden></p>
     <div class="grid" id="grid"></div>
     <p class="empty" id="galleryEmpty">まだ写真がありません</p>
   </div>
@@ -282,7 +289,12 @@
         <button type="button" data-bg="white" aria-pressed="true">白</button>
         <button type="button" data-bg="transparent" aria-pressed="false">透明</button>
       </div>
-      <div class="desc" style="flex:1 1 100%">背景除去はこのiPhoneの中で動きます。はじめて使うときだけAIの部品（約44MB）をダウンロードします。1枚あたり10〜40秒ほどかかります。</div>
+      <div style="flex: 1 1 100%; margin-top: 8px"><div class="label">背景除去の精度</div><div class="desc">「きれい」がおすすめ。部品は約88MB。「速い」は約44MBで軽いぶん、境目が荒れることがあります。</div></div>
+      <div class="seg" id="bgModelSeg">
+        <button type="button" data-m="isnet_fp16" aria-pressed="true">きれい</button>
+        <button type="button" data-m="isnet_quint8" aria-pressed="false">速い</button>
+      </div>
+      <div class="desc" style="flex:1 1 100%">背景除去はこのiPhoneの中で動きます。はじめて使うときだけAIの部品をダウンロードします（Wi-Fi推奨）。iPhoneのGPUが使えれば1枚数秒、使えないときは10〜40秒かかります。</div>
       <button class="textbtn" id="bgPreloadBtn" type="button" style="flex:none">AIの部品を先にダウンロード</button>
       <div class="desc" id="bgPreloadInfo" style="flex:1 1 100%"></div>
     </div>
@@ -310,7 +322,7 @@
         <li>白い枠の中が正方形の写真になります。まん中の白いボタンで撮影。何枚でも続けて撮れます。</li>
         <li>左下のサムネイルから一覧を開き、「まとめて保存」。</li>
         <li>出てきた共有メニューで「画像を保存」を選ぶと、写真アプリに全部入ります。</li>
-        <li>背景を消したいときは、一覧から写真を開いて「背景を消す」。元の写真は残り、背景を消した写真が1枚増えます。</li>
+        <li>背景を消したいときは、一覧の「まとめて背景を消す」。1枚だけなら写真を開いて「背景を消す」。元の写真は残り、背景を消した写真が増えます。処理中は画面を消さないでください。</li>
       </ol>
       <h3>注意</h3>
       <ul>
@@ -359,11 +371,12 @@
     settings: $('settings'), settingsBack: $('settingsBack'), fixSwitch: $('fixSwitch'),
     qualitySeg: $('qualitySeg'), resInfo: $('resInfo'), work: $('work'), soundSwitch: $('soundSwitch'),
     bgBtn: $('bgBtn'), bgProgress: $('bgProgress'), bgSeg: $('bgSeg'), bgPreloadBtn: $('bgPreloadBtn'), bgPreloadInfo: $('bgPreloadInfo'),
+    bgModelSeg: $('bgModelSeg'), bgAllBtn: $('bgAllBtn'), bgAllInfo: $('bgAllInfo'),
     sizeSeg: $('sizeSeg'), sizeInput: $('sizeInput'), sizeInfo: $('sizeInfo'),
   };
 
   // ---- 設定（端末ローカル） ----
-  const settings = { fix: true, quality: 0.95, maxEdge: 1440, aspect: 'square', sound: true, bg: 'white', v: 2 };
+  const settings = { fix: true, quality: 0.95, maxEdge: 1440, aspect: 'square', sound: true, bg: 'white', bgModel: 'isnet_fp16', v: 2 };
   try {
     const s = JSON.parse(localStorage.getItem('gyrooff.settings') || '{}');
     if (typeof s.fix === 'boolean') settings.fix = s.fix;
@@ -372,12 +385,14 @@
     // 旧版の初期値「最大(0)」は重いので標準(1440)へ。旧版で選んだ大きい数字もそのまま残す
     if (typeof s.sound === 'boolean') settings.sound = s.sound;
     if (s.bg === 'white' || s.bg === 'transparent') settings.bg = s.bg;
+    if (s.bgModel === 'isnet_fp16' || s.bgModel === 'isnet_quint8') settings.bgModel = s.bgModel;
   } catch (e) {}
   function saveSettings() { try { localStorage.setItem('gyrooff.settings', JSON.stringify(settings)); } catch (e) {} }
   function renderSettings() {
     els.fixSwitch.setAttribute('aria-checked', String(settings.fix));
     els.soundSwitch.setAttribute('aria-checked', String(settings.sound));
     for (const b of els.bgSeg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.bg === settings.bg));
+    for (const b of els.bgModelSeg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.m === settings.bgModel));
     for (const b of els.qualitySeg.querySelectorAll('button')) {
       b.setAttribute('aria-pressed', String(Number(b.dataset.q) === settings.quality));
     }
@@ -499,7 +514,7 @@
     const db = await openDB(); if (!db) return;
     try {
       const tx = db.transaction(['shots', 'full'], 'readwrite');
-      tx.objectStore('shots').put({ id: shot.id, thumb: shot.thumb || null, w: shot.w, h: shot.h, ts: shot.ts, saved: shot.saved, type: shot.type || 'image/jpeg', nobg: !!shot.nobg });
+      tx.objectStore('shots').put({ id: shot.id, thumb: shot.thumb || null, w: shot.w, h: shot.h, ts: shot.ts, saved: shot.saved, type: shot.type || 'image/jpeg', nobg: !!shot.nobg, bgDone: !!shot.bgDone });
       if (shot.blob) tx.objectStore('full').put({ id: shot.id, blob: shot.blob });
     } catch (e) {}
   }
@@ -807,9 +822,10 @@
       const b = document.createElement('button'); b.type = 'button'; b.dataset.id = s.id;
       const img = document.createElement('img'); img.src = s.thumbUrl || s.url; img.alt = ''; img.decoding = 'async'; img.loading = 'lazy';
       const tag = document.createElement('span'); tag.className = 'tag' + (s.saved ? ' ok' : '');
-      tag.textContent = s.saved ? '保存ずみ' : '未保存';
+      tag.textContent = (s.nobg ? '背景なし・' : '') + (s.saved ? '保存ずみ' : '未保存');
       b.append(img, tag); els.grid.appendChild(b);
     }
+    renderBgAll();
   }
   els.thumbBtn.addEventListener('click', () => { renderGallery(); show(els.gallery); });
   els.galleryBack.addEventListener('click', () => { show(els.cam); renderThumb(); if (!stream || !stream.active) restartSoon(); });
@@ -867,7 +883,7 @@
     dbPut(s); openViewer(s.id); renderThumb();
   }
   // ---- 背景除去（@imgly/background-removal・ISNet。iPhoneの中で動く） ----
-  const BG_LIB = 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.7.0/+esm';
+  const BG_LIB = 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.7.0/dist/index.mjs';
   let bgLibP = null, bgBusy = false;
   function loadBgLib() {
     if (!bgLibP) bgLibP = import(BG_LIB).catch((e) => { bgLibP = null; throw e; });
@@ -876,21 +892,35 @@
   function bgProgressText(key, cur, tot) {
     if (key && key.startsWith('fetch')) {
       const pct = tot ? Math.round(cur / tot * 100) : 0;
-      return `AIの部品をダウンロード中 ${pct}%（初回だけ・約44MB）`;
+      const mb = settings.bgModel === 'isnet_fp16' ? '約88MB' : '約44MB';
+      return `AIの部品をダウンロード中 ${pct}%（初回だけ・${mb}）`;
     }
-    return '背景を判定中…（10〜40秒）';
+    return bgDevice === 'gpu' ? '背景を判定中…（GPU）' : '背景を判定中…（10〜40秒）';
   }
-  async function removeBackgroundOf(s) {
+  // GPU（WebGPU）が使えればGPU、だめならCPU。一度失敗したらその後はCPUで通す
+  let bgDevice = (navigator.gpu ? 'gpu' : 'cpu');
+  let bgLastMs = 0;
+  async function runRemove(mod, src, onProgress) {
+    const opts = (device) => ({ model: settings.bgModel, device, output: { format: 'image/png', quality: 1 }, progress: onProgress });
+    const t0 = performance.now();
+    try {
+      const out = await mod.removeBackground(src, opts(bgDevice));
+      bgLastMs = performance.now() - t0; return out;
+    } catch (e) {
+      if (bgDevice !== 'gpu') throw e;
+      bgDevice = 'cpu';
+      const out = await mod.removeBackground(src, opts('cpu'));
+      bgLastMs = performance.now() - t0; return out;
+    }
+  }
+  async function removeBackgroundOf(s, report) {
+    const say = report || ((t) => { els.bgProgress.textContent = t; });
     const mod = await loadBgLib();
     const src = await ensureBlob(s);
     if (!src) throw new Error('写真を読み込めませんでした');
-    els.bgProgress.textContent = '準備中…';
-    const png = await mod.removeBackground(src, {
-      model: 'isnet_quint8', device: 'cpu',
-      output: { format: 'image/png', quality: 1 },
-      progress: (key, cur, tot) => { els.bgProgress.textContent = bgProgressText(key, cur, tot); },
-    });
-    els.bgProgress.textContent = '仕上げ中…';
+    say('準備中…');
+    const png = await runRemove(mod, src, (key, cur, tot) => say(bgProgressText(key, cur, tot)));
+    say('仕上げ中…');
     let blob = png, type = 'image/png';
     const bm = await createImageBitmap(png);
     if (settings.bg === 'white') {
@@ -906,6 +936,7 @@
     bm.close && bm.close();
     const shot = { id: String(Date.now()) + Math.random().toString(16).slice(2, 6), blob, type, nobg: true, url: URL.createObjectURL(blob), thumb, thumbUrl: thumb ? URL.createObjectURL(thumb) : '', w: bw, h: bh, ts: Date.now(), saved: false };
     shots.push(shot); dbPut(shot); renderThumb();
+    s.bgDone = true; dbPut(s);
     return shot;
   }
   els.bgBtn.addEventListener('click', async () => {
@@ -916,7 +947,7 @@
       const shot = await removeBackgroundOf(s);
       els.bgProgress.hidden = true;
       openViewer(shot.id);
-      status('背景を消しました。元の写真も残っています', 3000);
+      status(`背景を消しました（${bgDevice === 'gpu' ? 'GPU' : 'CPU'}・${(bgLastMs / 1000).toFixed(1)}秒）。元の写真も残っています`, 3000);
     } catch (e) {
       els.bgProgress.textContent = `背景を消せませんでした（${e && e.message ? e.message : e}）。通信を確認して、もう一度押してください。`;
       els.bgBtn.textContent = '背景を消す';
@@ -928,15 +959,54 @@
     const b = e.target.closest('button'); if (!b) return;
     settings.bg = b.dataset.bg; saveSettings(); renderSettings();
   });
+  els.bgModelSeg.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    settings.bgModel = b.dataset.m; saveSettings(); renderSettings();
+  });
   els.bgPreloadBtn.addEventListener('click', async () => {
     els.bgPreloadBtn.disabled = true; els.bgPreloadInfo.textContent = '読み込み中…';
     try {
       const mod = await loadBgLib();
-      await mod.preload({ model: 'isnet_quint8', device: 'cpu', progress: (key, cur, tot) => { els.bgPreloadInfo.textContent = bgProgressText(key, cur, tot); } });
+      await mod.preload({ model: settings.bgModel, device: bgDevice, progress: (key, cur, tot) => { els.bgPreloadInfo.textContent = bgProgressText(key, cur, tot); } });
       els.bgPreloadInfo.textContent = '準備できました。次の背景除去はすぐ始まります。';
     } catch (e) {
       els.bgPreloadInfo.textContent = `ダウンロードできませんでした（${e && e.message ? e.message : e}）`;
       els.bgPreloadBtn.disabled = false;
+    }
+  });
+
+  // ---- まとめて背景を消す（まだ消していない写真を順番に） ----
+  let bgAllRunning = false, bgAllCancel = false;
+  function bgTargets() { return shots.filter((s) => !s.nobg && !s.bgDone); }
+  function renderBgAll() {
+    const n = bgTargets().length;
+    if (bgAllRunning) { els.bgAllBtn.textContent = '止める'; els.bgAllBtn.disabled = false; return; }
+    els.bgAllBtn.textContent = n ? `まとめて背景を消す（${n}枚）` : '背景を消す写真はありません';
+    els.bgAllBtn.disabled = n === 0 || bgBusy;
+  }
+  els.bgAllBtn.addEventListener('click', async () => {
+    if (bgAllRunning) { bgAllCancel = true; els.bgAllBtn.textContent = '止めています…'; els.bgAllBtn.disabled = true; return; }
+    const targets = bgTargets(); if (!targets.length || bgBusy) return;
+    bgAllRunning = true; bgAllCancel = false; bgBusy = true; renderBgAll();
+    els.bgAllInfo.hidden = false;
+    let done = 0, failed = 0;
+    const t0 = performance.now();
+    try {
+      for (const s of targets) {
+        if (bgAllCancel) break;
+        const left = targets.length - done - failed;
+        const est = done ? ` 残り約${Math.ceil((performance.now() - t0) / done * (left - 1) / 1000 + bgLastMs / 1000)}秒` : '';
+        const prefix = `${done + failed + 1}枚目 / 全${targets.length}枚${est}：`;
+        try {
+          await removeBackgroundOf(s, (t) => { els.bgAllInfo.textContent = prefix + t; });
+          done++;
+        } catch (e) { failed++; els.bgAllInfo.textContent = prefix + `失敗（${e && e.message ? e.message : e}）`; await new Promise((r) => setTimeout(r, 800)); }
+        renderGallery();
+      }
+    } finally {
+      bgAllRunning = false; bgBusy = false; bgAllCancel = false;
+      els.bgAllInfo.textContent = `${done}枚の背景を消しました${failed ? `（${failed}枚は失敗）` : ''}${bgDevice === 'gpu' ? '・GPU' : '・CPU'}・${((performance.now() - t0) / 1000).toFixed(0)}秒。画面を下に送ると、背景なしの写真が並んでいます。`;
+      renderGallery();
     }
   });
 
@@ -967,7 +1037,7 @@
     for (const r of saved) {
       if (r.saved) { dbDelete(r.id); continue; }
       const th = r.thumb instanceof Blob ? r.thumb : null;
-      shots.push({ id: r.id, blob: null, type: r.type || 'image/jpeg', nobg: !!r.nobg, url: '', thumb: th, thumbUrl: th ? URL.createObjectURL(th) : '', w: r.w, h: r.h, ts: r.ts, saved: false });
+      shots.push({ id: r.id, blob: null, type: r.type || 'image/jpeg', nobg: !!r.nobg, bgDone: !!r.bgDone, url: '', thumb: th, thumbUrl: th ? URL.createObjectURL(th) : '', w: r.w, h: r.h, ts: r.ts, saved: false });
     }
     T.dbCount = shots.length;
     renderDiag();
