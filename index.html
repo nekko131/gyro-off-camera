@@ -283,6 +283,9 @@
     <div class="row">
       <div><div class="label">カメラの解像度</div><div class="desc" id="resInfo">カメラを開くと表示されます</div></div>
     </div>
+    <div class="row">
+      <div><div class="label">起動の記録</div><div class="desc" id="diag">カメラを開くと表示されます</div><div class="desc">起動が遅いときは、この行を読み上げるか画面写真で教えてください。</div></div>
+    </div>
     <div class="help">
       <h3>このアプリの仕組み</h3>
       <ul>
@@ -309,6 +312,25 @@
 <script>
 (() => {
   'use strict';
+  // 起動の各工程の時刻（設定画面で内訳を見せる）
+  const T = { script: performance.now() };
+  function fmt(ms) { return (ms / 1000).toFixed(1) + '秒'; }
+  function pageLoadMs() {
+    try { const n = performance.getEntriesByType('navigation')[0]; if (n && n.responseEnd) return n.responseEnd; } catch (e) {}
+    return 0;
+  }
+  function renderDiag() {
+    const el = document.getElementById('diag'); if (!el) return;
+    const parts = [];
+    const pl = pageLoadMs(); if (pl) parts.push(`ページ読み込み ${fmt(pl)}`);
+    if (T.dbEnd != null) parts.push(`写真の復元 ${T.dbCount || 0}枚 ${fmt(T.dbEnd - T.dbStart)}`);
+    if (T.tap != null) parts.push(`開始 ${T.auto ? '自動' : 'タップ'}（ページ表示から ${fmt(T.tap)}）`);
+    if (T.gum != null) parts.push(`カメラの許可と接続 ${fmt(T.gum - T.tap)}`);
+    if (T.meta != null) parts.push(`映像の大きさ確定 ${fmt(T.meta - T.gum)}`);
+    if (T.frame != null) parts.push(`最初の映像が出るまで ${fmt(T.frame - T.meta)}`);
+    if (T.frame != null) parts.push(`合計（ページ表示から映像まで）${fmt(T.frame)}`);
+    el.textContent = parts.join(' → ');
+  }
   const $ = (id) => document.getElementById(id);
   const els = {
     start: $('start'), startBtn: $('startBtn'), startErr: $('startErr'),
@@ -434,8 +456,22 @@
     if (dbp) return dbp;
     dbp = new Promise((resolve) => {
       try {
-        const req = indexedDB.open('gyrooff', 1);
-        req.onupgradeneeded = () => { req.result.createObjectStore('shots', { keyPath: 'id' }); };
+        const req = indexedDB.open('gyrooff', 2);
+        req.onupgradeneeded = (ev) => {
+          const db = req.result, tx = req.transaction;
+          if (!db.objectStoreNames.contains('shots')) db.createObjectStore('shots', { keyPath: 'id' });
+          if (!db.objectStoreNames.contains('full')) db.createObjectStore('full', { keyPath: 'id' });
+          if (ev.oldVersion < 2) {
+            // 旧版：写真本体が shots に入っていたので full へ移す
+            const shots = tx.objectStore('shots'), full = tx.objectStore('full');
+            shots.openCursor().onsuccess = (e) => {
+              const cur = e.target.result; if (!cur) return;
+              const r = cur.value;
+              if (r.blob instanceof Blob) { full.put({ id: r.id, blob: r.blob }); delete r.blob; cur.update(r); }
+              cur.continue();
+            };
+          }
+        };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => resolve(null);
       } catch (e) { resolve(null); }
@@ -445,13 +481,34 @@
   async function dbPut(shot) {
     const db = await openDB(); if (!db) return;
     try {
-      const tx = db.transaction('shots', 'readwrite');
-      tx.objectStore('shots').put({ id: shot.id, blob: shot.blob, thumb: shot.thumb || null, w: shot.w, h: shot.h, ts: shot.ts, saved: shot.saved });
+      const tx = db.transaction(['shots', 'full'], 'readwrite');
+      tx.objectStore('shots').put({ id: shot.id, thumb: shot.thumb || null, w: shot.w, h: shot.h, ts: shot.ts, saved: shot.saved });
+      if (shot.blob) tx.objectStore('full').put({ id: shot.id, blob: shot.blob });
     } catch (e) {}
   }
   async function dbDelete(id) {
     const db = await openDB(); if (!db) return;
-    try { db.transaction('shots', 'readwrite').objectStore('shots').delete(id); } catch (e) {}
+    try {
+      const tx = db.transaction(['shots', 'full'], 'readwrite');
+      tx.objectStore('shots').delete(id); tx.objectStore('full').delete(id);
+    } catch (e) {}
+  }
+  async function dbGetBlob(id) {
+    const db = await openDB(); if (!db) return null;
+    return new Promise((resolve) => {
+      try {
+        const req = db.transaction('full', 'readonly').objectStore('full').get(id);
+        req.onsuccess = () => resolve(req.result && req.result.blob instanceof Blob ? req.result.blob : null);
+        req.onerror = () => resolve(null);
+      } catch (e) { resolve(null); }
+    });
+  }
+  // 写真本体は必要になったときだけ読み込む（起動を軽くするため）
+  async function ensureBlob(s) {
+    if (s.blob) return s.blob;
+    const b = await dbGetBlob(s.id);
+    if (b) { s.blob = b; if (!s.url) s.url = URL.createObjectURL(b); }
+    return s.blob;
   }
   async function dbAll() {
     const db = await openDB(); if (!db) return [];
@@ -508,14 +565,21 @@
       audio: false,
       video: { facingMode: { ideal: facing }, width: { ideal: Math.round(short * 4 / 3) }, height: { ideal: short }, frameRate: { ideal: 30, max: 30 } },
     };
+    if (T.tap == null) T.tap = performance.now();
     try {
       stream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (e1) {
       // 解像度指定で失敗する端末向けに、条件を緩めてもう一度
       stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: facing } } });
     }
+    if (T.gum == null) T.gum = performance.now();
     els.video.srcObject = stream;
     els.video.classList.toggle('mirror', facing === 'user');
+    if (T.frame == null) {
+      const mark = () => { if (T.frame == null) { T.frame = performance.now(); renderDiag(); } };
+      if (els.video.requestVideoFrameCallback) els.video.requestVideoFrameCallback(mark);
+      else els.video.addEventListener('timeupdate', mark, { once: true });
+    }
     // すぐ再生を始め、映像の大きさが分かった時点で先へ進む（最大1秒だけ待つ）
     const playing = els.video.play();
     if (playing && playing.catch) playing.catch(() => {});
@@ -526,6 +590,8 @@
       els.video.addEventListener('playing', done);
       setTimeout(done, 1000);
     });
+    if (T.meta == null) T.meta = performance.now();
+    renderDiag();
     updateGuide();
     const track = stream.getVideoTracks()[0];
     const st = track && track.getSettings ? track.getSettings() : {};
@@ -569,6 +635,7 @@
       try { localStorage.setItem('gyrooff.started', '1'); } catch (e) {}
     } catch (e) {
       show(els.start);
+      T.tap = T.gum = T.meta = T.frame = null; // 失敗した分は記録から外し、次のタップで計り直す
       const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
       els.startErr.textContent = denied
         ? 'カメラの使用が許可されていません。Safariのアドレスバー左の「ぁあ」→「Webサイトの設定」→ カメラ を「許可」にしてから、もう一度押してください。'
@@ -641,7 +708,7 @@
   function pruneSaved() {
     const saved = shots.filter((s) => s.saved);
     for (const s of saved.slice(0, Math.max(0, saved.length - 20))) {
-      URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl);
+      if (s.url) URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl);
       shots.splice(shots.indexOf(s), 1);
     }
   }
@@ -679,9 +746,12 @@
   }
 
   // ---- 保存（共有シート経由で写真アプリへ） ----
-  function toFiles(list) { return list.map((s) => new File([s.blob], fileName(s.ts), { type: 'image/jpeg', lastModified: s.ts })); }
+  function toFiles(list) { return list.filter((s) => s.blob).map((s) => new File([s.blob], fileName(s.ts), { type: 'image/jpeg', lastModified: s.ts })); }
   async function saveShots(list) {
     if (!list.length) return false;
+    await Promise.all(list.map(ensureBlob));
+    list = list.filter((s) => s.blob);
+    if (!list.length) { status('写真を読み込めませんでした'); return false; }
     const files = toFiles(list);
     if (navigator.share && (!navigator.canShare || navigator.canShare({ files }))) {
       try {
@@ -738,7 +808,8 @@
   function openViewer(id) {
     const s = shots.find((x) => x.id === id); if (!s) return;
     currentId = id;
-    els.viewerImg.src = s.url;
+    els.viewerImg.src = s.url || s.thumbUrl || '';
+    if (!s.url) ensureBlob(s).then(() => { if (currentId === id && s.url) els.viewerImg.src = s.url; });
     const d = new Date(s.ts);
     els.viewerMeta.textContent = `${s.w} × ${s.h} ・ ${pad(d.getHours())}:${pad(d.getMinutes())}${s.saved ? ' ・ 保存ずみ' : ''}`;
     show(els.viewer);
@@ -755,19 +826,20 @@
     if (!s.saved && els.deleteBtn.dataset.confirm !== s.id) {
       els.deleteBtn.dataset.confirm = s.id; els.deleteBtn.textContent = '未保存です。本当に削除'; return;
     }
-    URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl); shots.splice(i, 1); dbDelete(s.id);
+    if (s.url) URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl); shots.splice(i, 1); dbDelete(s.id);
     els.deleteBtn.textContent = '削除'; delete els.deleteBtn.dataset.confirm;
     renderGallery(); renderThumb(); show(els.gallery);
   });
   els.viewerBack.addEventListener('click', () => { els.deleteBtn.textContent = '削除'; delete els.deleteBtn.dataset.confirm; });
   async function rotateCurrent(deg) {
     const s = shots.find((x) => x.id === currentId); if (!s) return;
+    if (!(await ensureBlob(s))) { status('写真を読み込めませんでした'); return; }
     const img = new Image();
     await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = s.url; });
     const c = drawRotated(img, img.naturalWidth, img.naturalHeight, (deg + 360) % 360);
     const blob = await canvasToBlob(c, Math.max(settings.quality, 0.92));
     let thumb = null; try { thumb = await makeThumb(c); } catch (e) {}
-    URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl);
+    if (s.url) URL.revokeObjectURL(s.url); if (s.thumbUrl) URL.revokeObjectURL(s.thumbUrl);
     s.blob = blob; s.url = URL.createObjectURL(blob); s.thumb = thumb; s.thumbUrl = thumb ? URL.createObjectURL(thumb) : '';
     s.w = c.width; s.h = c.height; s.saved = false;
     dbPut(s); openViewer(s.id); renderThumb();
@@ -789,18 +861,20 @@
     renderSettings();
     let auto = false;
     try { auto = localStorage.getItem('gyrooff.started') === '1'; } catch (e) {}
-    if (auto && navigator.permissions && navigator.permissions.query) {
-      try { const p = await navigator.permissions.query({ name: 'camera' }); auto = p.state === 'granted'; } catch (e) { auto = false; }
-    } else auto = false;
+    // 2回目からは、許可の問い合わせを待たずにすぐカメラを開く（許可が切れていれば開始画面に戻る）
+    T.auto = auto;
     if (auto) openCamera();
+    T.dbStart = performance.now();
     const saved = await dbAll();
+    T.dbEnd = performance.now();
     saved.sort((a, b) => a.ts - b.ts);
     for (const r of saved) {
-      if (!(r.blob instanceof Blob)) continue;
       if (r.saved) { dbDelete(r.id); continue; }
       const th = r.thumb instanceof Blob ? r.thumb : null;
-      shots.push({ id: r.id, blob: r.blob, url: URL.createObjectURL(r.blob), thumb: th, thumbUrl: th ? URL.createObjectURL(th) : '', w: r.w, h: r.h, ts: r.ts, saved: !!r.saved });
+      shots.push({ id: r.id, blob: null, url: '', thumb: th, thumbUrl: th ? URL.createObjectURL(th) : '', w: r.w, h: r.h, ts: r.ts, saved: false });
     }
+    T.dbCount = shots.length;
+    renderDiag();
     renderThumb();
     const unsaved = shots.filter((s) => !s.saved).length;
     if (unsaved && !auto) {
